@@ -194,6 +194,7 @@ def main():
         pos_weight[c] = torch.tensor(max(0.1, min(10.0, nr / max(1.0, nd))), device=device)
 
     best = {"score": -1.0, "sd": None, "epoch": 0}
+    cache: dict[int, list] = {}
     t0 = time.time()
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -220,16 +221,48 @@ def main():
             run += float(loss.detach().cpu())
         sched.step()
         msg = f"epoch {epoch}/{args.epochs} loss={run / args.steps:.4f} lr={sched.get_last_lr()[0]:.2e}"
-        if epoch % 2 == 0 or epoch == args.epochs:
-            ema_model = TCNNet(n_features, ch=args.ch, dilations=dilations, repeats=2).to(device)
-            ema_model.load_state_dict({k: torch.from_numpy(v).to(device) for k, v in ema.state().items()})
-            score, dec = validate(ema_model, va_data, device)
-            msg += f" | val@0.5={score:.3f} real=({dec['POR']['acc_real']:.3f},{dec['PERM']['acc_real']:.3f},{dec['SW']['acc_real']:.3f})"
-            if score > best["score"]:
-                best = {"score": score, "sd": ema.state(), "epoch": epoch}
+        if epoch % 4 == 0 or epoch == args.epochs:
+            sd_now = ema.state()
+            outs = []
+            for w in va_data:
+                outs.append(numpy_forward(w["X"], sd_now, list(dilations) * 2))
+            cache[epoch] = (sd_now, outs)
+            dec = []
+            for w, o in zip(va_data, outs):
+                d = {}
+                for c in TARGETS:
+                    p = 1.0 / (1.0 + np.exp(-o[c][:, 0]))
+                    pred = np.where(p >= 0.5, DEFAULT_VALUES[c], np.power(10.0, o[c][:, 1]))
+                    d[c] = decompose(c, pred, w[f"{c}_y"], w[f"{c}_def"] > 0.5)
+                dec.append(d)
+            md = {c: {k: float(np.nanmean([d[c][k] for d in dec])) for k in dec[0][c]} for c in TARGETS}
+            s05 = sum(WEIGHTS[c] * md[c]["acc"] for c in TARGETS) * 100.0
+            msg += f" | val@0.5={s05:.3f} real=({md['POR']['acc_real']:.3f},{md['PERM']['acc_real']:.3f},{md['SW']['acc_real']:.3f})"
         print(msg, flush=True)
 
-    print(f"best val@0.5={best['score']:.3f} @epoch {best['epoch']} | {time.time() - t0:.0f}s")
+    # 按调优后总分选择 epoch（避免 val@0.5 偏向默认解）
+    grid_sel = np.arange(0.05, 0.96, 0.05)
+    best_epoch, best_tuned = None, -1.0
+    for ep, (_sd, outs) in cache.items():
+        tot = 0.0
+        for c in TARGETS:
+            best_a = -1.0
+            for t in grid_sel:
+                accs = []
+                for w, o in zip(va_data, outs):
+                    p = 1.0 / (1.0 + np.exp(-o[c][:, 0]))
+                    pred = np.where(p >= t, DEFAULT_VALUES[c], np.power(10.0, o[c][:, 1]))
+                    y = w[f"{c}_y"]
+                    m = ~np.isnan(y)
+                    accs.append(pointwise(c, pred[m], y[m]).mean())
+                best_a = max(best_a, float(np.mean(accs)))
+            tot += WEIGHTS[c] * best_a
+        tot *= 100.0
+        print(f"  epoch {ep}: tuned={tot:.3f}", flush=True)
+        if tot > best_tuned:
+            best_tuned, best_epoch = tot, ep
+    print(f"best tuned={best_tuned:.3f} @epoch {best_epoch} | {time.time() - t0:.0f}s")
+    best = {"score": best_tuned, "sd": cache[best_epoch][0], "epoch": best_epoch}
     os.makedirs(RUNS_DIR, exist_ok=True)
     art_path = os.path.join(RUNS_DIR, f"tcn_{args.tag}.joblib")
     joblib.dump(
