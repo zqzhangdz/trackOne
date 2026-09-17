@@ -42,11 +42,14 @@ def main() -> None:
         scaler = joblib.load(scaler_path)
         expected_features = scaler.get("feature_columns")
 
+    feat_context = bool(cfg.get("feature_context", False))
+    feat_priors = bool(cfg.get("feature_priors", False))
+
     wells = load_wells(args.data_dir, has_labels=False)
     result_data = []
     for df in wells:
         log_id = df["logId"].iloc[0]
-        X = make_features(df)
+        X = make_features(df, context=feat_context, priors=feat_priors)
         if expected_features is not None:
             X = X[expected_features]
         pred = predict(model, X)
