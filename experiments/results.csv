@@ -1,0 +1,4 @@
+tag,mode,folds,context,priors,ttransform,weights,mono,total,std,POR_acc,PERM_acc,SW_acc,POR_real,PERM_real,SW_real,POR_def,PERM_def,SW_def
+A_baseline,screen,1,0,0,perm_log,0,0,67.33,0.0,0.6422,0.6185,0.7548,0.1269,0.0416,0.1061,0.9853,0.9931,0.9898
+B_ctx,screen,1,1,0,perm_log,0,0,67.944,0.0,0.6506,0.6229,0.7607,0.1433,0.0524,0.1311,0.9883,0.9933,0.9889
+C_ctx_pri,screen,1,1,1,perm_log,0,0,67.962,0.0,0.6509,0.6229,0.7609,0.1455,0.0517,0.1309,0.9875,0.9938,0.9892,none,15

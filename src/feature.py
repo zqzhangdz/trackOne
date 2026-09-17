@@ -60,18 +60,19 @@ def add_physics_priors(X: pd.DataFrame) -> pd.DataFrame:
 def _context_for_well(g: pd.DataFrame) -> pd.DataFrame:
     """单井上下文特征：lag/lead、窗口均值/标准差、一阶差分（按深度排序计算）."""
     g = g.sort_values("DEPTH")
-    out = pd.DataFrame(index=g.index)
-    out["rel_depth"] = g["DEPTH"].to_numpy() - g["DEPTH"].to_numpy()[0]
+    cols: dict[str, np.ndarray] = {
+        "rel_depth": g["DEPTH"].to_numpy() - g["DEPTH"].to_numpy()[0]
+    }
     for c in CURVE_COLS:
         s = g[c]
         for k in LAG_OFFSETS:
-            out[f"{c}_lag{k}"] = s.shift(k).to_numpy()
+            cols[f"{c}_lag{k}"] = s.shift(k).to_numpy()
         for w in WIN_SIZES:
             r = s.rolling(w, center=True, min_periods=1)
-            out[f"{c}_wmean{w}"] = r.mean().to_numpy()
-            out[f"{c}_wstd{w}"] = r.std().fillna(0.0).to_numpy()
-        out[f"{c}_diff1"] = s.diff(1).to_numpy()
-    return out
+            cols[f"{c}_wmean{w}"] = r.mean().to_numpy()
+            cols[f"{c}_wstd{w}"] = r.std().fillna(0.0).to_numpy()
+        cols[f"{c}_diff1"] = s.diff(1).to_numpy()
+    return pd.DataFrame(cols, index=g.index)
 
 
 def make_features(df: pd.DataFrame, context: bool = False, priors: bool = False) -> pd.DataFrame:
