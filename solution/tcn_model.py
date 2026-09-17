@@ -51,40 +51,4 @@ def export_to_numpy(model: TCNNet) -> dict:
     return sd
 
 
-def _conv1d_np(x: np.ndarray, w: np.ndarray, b: np.ndarray, dilation: int) -> np.ndarray:
-    """x: (T, C) 非因果 conv1d, kernel=5, padding=2*dilation, zero-pad. w: (Cout, Cin, 5)."""
-    T, C = x.shape
-    pad = 2 * dilation
-    xp = np.zeros((T + 2 * pad, C), dtype=x.dtype)
-    xp[pad:pad + T] = x
-    out = np.zeros((T, w.shape[0]), dtype=np.float32)
-    for k in range(5):
-        start = pad - 2 * dilation + k * dilation
-        out += xp[start:start + T] @ w[:, :, k].T
-    return out + b
-
-
-def _linear_np(x: np.ndarray, w: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return x @ w.T + b
-
-
-def numpy_forward(x: np.ndarray, sd: dict, dilations: list[int]) -> dict[str, np.ndarray]:
-    h = _linear_np(x, sd["in_proj.weight"], sd["in_proj.bias"])
-    for i, d in enumerate(dilations):
-        prefix = f"blocks.{i}."
-        c = _conv1d_np(h, sd[prefix + "conv.weight"], sd[prefix + "conv.bias"], d)
-        gw = sd[prefix + "norm.weight"]
-        gb = sd[prefix + "norm.bias"]
-        mu = c.mean(axis=1, keepdims=True)
-        var = c.var(axis=1, keepdims=True)
-        c = (c - mu) / np.sqrt(var + 1e-5) * gw + gb
-        h = h + _gelu_np(c)
-    mu = h.mean(axis=1, keepdims=True)
-    var = h.var(axis=1, keepdims=True)
-    h = (h - mu) / np.sqrt(var + 1e-5) * sd["out_norm.weight"] + sd["out_norm.bias"]
-    h = _gelu_np(h)
-    return {c: _linear_np(h, sd[f"heads.{c}.weight"], sd[f"heads.{c}.bias"]) for c in TARGETS}
-
-
-def _gelu_np(x: np.ndarray) -> np.ndarray:
-    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3)))
+from src.model import numpy_forward_tcn as numpy_forward  # noqa: E402  (单一实现源)

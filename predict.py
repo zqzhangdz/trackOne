@@ -35,12 +35,14 @@ def main() -> None:
     model = load_model(model_path)
 
     expected_features = None
+    scaler = {}
     scaler_path = os.path.join(model_dir, scaler_file)
     if os.path.exists(scaler_path):
         import joblib
 
         scaler = joblib.load(scaler_path)
         expected_features = scaler.get("feature_columns")
+    has_tcn = model.get("tcn_sd") is not None
 
     feat_context = bool(cfg.get("feature_context", False))
     feat_priors = bool(cfg.get("feature_priors", False))
@@ -52,7 +54,13 @@ def main() -> None:
         X = make_features(df, context=feat_context, priors=feat_priors)
         if expected_features is not None:
             X = X[expected_features]
-        pred = predict(model, X)
+        X_tcn = None
+        if has_tcn:
+            medians, stds = scaler["tcn_medians"], scaler["tcn_stds"]
+            X_tcn = make_features(df, context=False, priors=True).fillna(medians)
+            X_tcn = (X_tcn - stds.replace(0, 1.0)) / stds.replace(0, 1.0)
+            X_tcn = X_tcn[scaler.get("tcn_feature_columns", list(X_tcn.columns))]
+        pred = predict(model, X, X_tcn)
         predictions = []
         for i in range(len(df)):
             predictions.append(

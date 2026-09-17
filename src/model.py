@@ -102,15 +102,70 @@ def load_model(path: str) -> dict:
     return joblib.load(path)
 
 
-def predict(model: dict, X: pd.DataFrame) -> pd.DataFrame:
-    """基于加载的模型 dict 进行推理（兼容旧工件：缺 target_transform 时按 perm_log）."""
+def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> pd.DataFrame:
+    """基于加载的模型 dict 进行推理.
+
+    兼容旧工件（缺 target_transform 时按 perm_log）。若工件含 tcn_sd 且提供
+    标准化后的 TCN 输入 X_tcn，则回归值在 log10 空间按 blend_w 融合树与 TCN。
+    """
     mode = model.get("target_transform", "perm_log")
     out = pd.DataFrame(index=X.index)
+    tcn_log = None
+    if model.get("tcn_sd") is not None and X_tcn is not None:
+        o = numpy_forward_tcn(X_tcn.to_numpy(dtype=np.float32), model["tcn_sd"], model["tcn_dilations"])
+        tcn_log = {c: o[c][:, 1] for c in TARGETS}
+    w_tcn = float(model.get("blend_w", 0.5))
     for c in TARGETS:
         p_def = model["classifiers"][c].predict_proba(X)[:, 1]
         is_def = p_def >= model["thresholds"][c]
         reg_raw = model["regressors"][c].predict(X)
-        reg_val = inverse_transform_target(c, pd.Series(reg_raw, index=X.index), mode).to_numpy()
+        reg_phys = inverse_transform_target(c, pd.Series(reg_raw, index=X.index), mode).to_numpy()
+        reg_log = np.log10(np.maximum(reg_phys, EPS))
+        if tcn_log is not None:
+            reg_log = (1.0 - w_tcn) * reg_log + w_tcn * tcn_log[c]
+            reg_phys = np.power(10.0, reg_log)
         lo, hi = OUTPUT_CLIP[c]
-        out[c] = np.clip(np.where(is_def, DEFAULT_VALUES[c], reg_val), lo, hi)
+        out[c] = np.clip(np.where(is_def, DEFAULT_VALUES[c], reg_phys), lo, hi)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 纯 numpy TCN 推理（提交包不依赖 torch；与 solution/tcn_model.py 的 torch 定义逐层一致）
+# ---------------------------------------------------------------------------
+
+def _linear_np(x: np.ndarray, w: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return x @ w.T + b
+
+
+def _gelu_np(x: np.ndarray) -> np.ndarray:
+    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3)))
+
+
+def _conv1d_np(x: np.ndarray, w: np.ndarray, b: np.ndarray, dilation: int) -> np.ndarray:
+    """x: (T, C); 非因果 conv1d, kernel=5, padding=2*dilation, zero-pad."""
+    T, C = x.shape
+    pad = 2 * dilation
+    xp = np.zeros((T + 2 * pad, C), dtype=x.dtype)
+    xp[pad:pad + T] = x
+    out = np.zeros((T, w.shape[0]), dtype=np.float32)
+    for k in range(5):
+        out += xp[k * dilation:k * dilation + T] @ w[:, :, k].T
+    return out + b
+
+
+def numpy_forward_tcn(x: np.ndarray, sd: dict, dilations: list[int]) -> dict[str, np.ndarray]:
+    """x: (T, F) 标准化后特征; 返回 {c: (T, 2) [logit_default, reg_log10]}."""
+    h = _linear_np(x, sd["in_proj.weight"], sd["in_proj.bias"])
+    for i, d in enumerate(dilations):
+        prefix = f"blocks.{i}."
+        c = _conv1d_np(h, sd[prefix + "conv.weight"], sd[prefix + "conv.bias"], d)
+        gw, gb = sd[prefix + "norm.weight"], sd[prefix + "norm.bias"]
+        mu = c.mean(axis=1, keepdims=True)
+        var = c.var(axis=1, keepdims=True)
+        c = (c - mu) / np.sqrt(var + 1e-5) * gw + gb
+        h = h + _gelu_np(c)
+    gw, gb = sd["out_norm.weight"], sd["out_norm.bias"]
+    mu = h.mean(axis=1, keepdims=True)
+    var = h.var(axis=1, keepdims=True)
+    h = _gelu_np((h - mu) / np.sqrt(var + 1e-5) * gw + gb)
+    return {c: _linear_np(h, sd[f"heads.{c}.weight"], sd[f"heads.{c}.bias"]) for c in TARGETS}
