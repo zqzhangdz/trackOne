@@ -1,7 +1,12 @@
-"""训练两阶段基线模型并保存到 models/ 目录.
+"""训练最终混合模型并保存到 models/ 目录.
 
 用法:
-    python train.py --data_dir ./train --out_dir ./models --cv_folds 5
+    python train.py --data_dir ./train --out_dir ./models --cv_folds 5 --with_tcn 1
+
+流程:
+  1) 两阶段树模型（上下文特征 + 物理先验 + POR 单调约束）全量训练;
+  2) 可选(torch): 双向 TCN pass1 + 自回归通道 pass2 (scheduled sampling);
+  3) 组装 model.pkl / scaler.pkl（混合推理所需全部工件）.
 """
 
 from __future__ import annotations
@@ -14,104 +19,247 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold
 
-from src.feature import (
-    default_mask,
-    inverse_transform_target,
-    load_wells,
-    make_features,
-    make_targets,
-    transform_target,
+from src.feature import default_mask, inverse_transform_target, load_wells, make_features, make_targets, transform_target
+from src.model import (
+    EPS,
+    TARGETS,
+    TwoStageModel,
+    _HAS_TORCH,
+    numpy_forward_tcn,
 )
-from src.model import TwoStageModel, predict as model_predict
-from src.utils import DEFAULT_VALUES, OUTPUT_CLIP, TARGETS, WEIGHTS, acc_single
+from src.utils import DEFAULT_VALUES, TOLERANCE, WEIGHTS, acc_single
+
+# 验证切分上调优得到的决策阈值（见 EXPERIMENTS.md）
+FINAL_THRESHOLDS = {"POR": 0.10, "PERM": 0.05, "SW": 0.05}
+FINAL_BLEND_W = [0.4, 0.3, 0.3]  # tree / tcn pass1 / tcn pass2
+DILATIONS = (1, 2, 4, 8, 16)
+SMOOTH_WIN = 9
+LN10 = float(np.log(np.float64(10.0)))
 
 
-THRESHOLD_GRID = np.arange(0.10, 0.91, 0.05)
+def causal_smooth(arr: np.ndarray, win: int = SMOOTH_WIN) -> np.ndarray:
+    csum = np.cumsum(np.concatenate([[0.0], np.asarray(arr, dtype=np.float64)]))
+    n = np.arange(1, arr.size + 1)
+    idx = np.maximum(n - win, 0)
+    return ((csum[1:] - csum[idx]) / np.minimum(n, win)).astype(np.float32)
 
 
-def tune_thresholds(model: TwoStageModel, X_val: pd.DataFrame, Y_val: pd.DataFrame) -> dict[str, float]:
-    best = {}
+def metric_loss(torch_F, pred_t, t, real, c):
+    d = (pred_t - t).abs()
+    if c == "PERM":
+        e = d / (TOLERANCE[c] * (t.abs() + EPS))
+    else:
+        e = LN10 * d / TOLERANCE[c]
+    if real.sum() == 0:
+        return pred_t.sum() * 0.0
+    return e.clamp(max=2.0)[real].mean() + 0.05 * ((pred_t - t) ** 2)[real].mean()
+
+
+class EMA:
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().cpu().clone().float() for k, v in model.state_dict().items()}
+
+    def update(self, model):
+        for k, v in model.state_dict().items():
+            vc = v.detach().cpu()
+            if vc.dtype.is_floating_point:
+                self.shadow[k].mul_(self.decay).add_(vc.float(), alpha=1 - self.decay)
+            else:
+                self.shadow[k] = vc.clone()
+
+    def state(self):
+        return {k: v.numpy() for k, v in self.shadow.items()}
+
+
+def build_wells(wells, medians, stds, channels=None):
+    out = []
+    for w in wells:
+        X = make_features(w, context=False, priors=True).fillna(medians)
+        X = ((X - stds.replace(0, 1.0)) / stds.replace(0, 1.0)).to_numpy(dtype=np.float32)
+        Y = make_targets(w)
+        isd = default_mask(Y)
+        item = {"X": X, "logId": w["logId"].iloc[0]}
+        for c in TARGETS:
+            y = Y[c].to_numpy(dtype=np.float32)
+            valid = ~np.isnan(y)
+            t = np.log10(np.maximum(np.nan_to_num(y, nan=1.0), EPS)).astype(np.float32)
+            item[f"{c}_valid"] = valid
+            item[f"{c}_def"] = (isd[c].to_numpy() & valid).astype(np.float32)
+            item[f"{c}_t"] = t
+            if channels is not None:
+                item[f"{c}_ch"] = channels[w["logId"].iloc[0]][c]
+        out.append(item)
+    return out
+
+
+def sample_batch(data, lengths, weights, L, batch, rng, use_ch=False, p_true=None):
+    idx = rng.choice(len(data), size=batch, p=weights)
+    xs, chs, masks = [], [], {f"{c}_{k}": [] for c in TARGETS for k in ("valid", "def", "t")}
+    for i in idx:
+        w = data[i]
+        T = int(lengths[i])
+        s = 0 if T <= L else int(rng.integers(0, T - L))
+        sl = slice(s, s + L)
+        xs.append(w["X"][sl])
+        if use_ch:
+            chs.append(np.stack([w[f"{c}_ch"][sl] for c in TARGETS], axis=1))
+        for key in masks:
+            masks[key].append(w[key][sl])
+    b = {"X": np.stack(xs)}
+    if use_ch:
+        b["CH"] = np.stack(chs)
+    for key, arrs in masks.items():
+        b[key] = np.stack(arrs).astype(np.float32)
+    return b
+
+
+def train_tcn(data, lengths, weights, n_features, args, device, epochs, channels=False, seed=42):
+    import torch
+    import torch.nn.functional as F
+
+    from src.model import TCNNet
+
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    model = TCNNet(n_features, ch=args.ch, dilations=DILATIONS, repeats=2).to(device)
+    ema = EMA(model)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
+    pos_weight = {}
     for c in TARGETS:
-        valid = Y_val[c].notna().to_numpy()
-        if valid.sum() == 0:
-            best[c] = 0.5
-            continue
-        p_def = model.classifiers[c].predict_proba(X_val)[:, 1]
-        reg_val = inverse_transform_target(c, pd.Series(model.regressors[c].predict(X_val), index=X_val.index)).to_numpy()
-        true = Y_val[c].to_numpy()[valid]
-        p_def_v = p_def[valid]
-        reg_v = reg_val[valid]
-        best_th, best_acc = 0.5, -1.0
-        for th in THRESHOLD_GRID:
-            pred = np.clip(np.where(p_def_v >= th, DEFAULT_VALUES[c], reg_v), *OUTPUT_CLIP[c])
-            a = acc_single(c, pred, true)
-            if a > best_acc:
-                best_acc, best_th = a, float(th)
-        best[c] = best_th
-    return best
+        nd = sum(float(w[f"{c}_def"].sum()) for w in data)
+        nr = sum(float((w[f"{c}_valid"].sum() - w[f"{c}_def"].sum())) for w in data)
+        pos_weight[c] = torch.tensor(max(0.1, min(10.0, nr / max(1.0, nd))), device=device)
+    for epoch in range(1, epochs + 1):
+        model.train()
+        run = 0.0
+        for _ in range(args.steps):
+            b = sample_batch(data, lengths, weights, args.window, args.batch, rng, use_ch=channels)
+            bt = {k: torch.from_numpy(v).to(device) for k, v in b.items()}
+            x = torch.cat([bt["X"], bt["CH"]], dim=-1) if channels else bt["X"]
+            out = model(x)
+            loss = 0.0
+            for c in TARGETS:
+                valid = bt[f"{c}_valid"] > 0.5
+                defm = bt[f"{c}_def"] > 0.5
+                real = valid & ~defm
+                if valid.any():
+                    loss = loss + F.binary_cross_entropy_with_logits(
+                        out[c][:, :, 0][valid], bt[f"{c}_def"][valid], pos_weight=pos_weight[c]
+                    )
+                loss = loss + metric_loss(F, out[c][:, :, 1], bt[f"{c}_t"], real, c)
+            opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            ema.update(model)
+            run += float(loss.detach().cpu())
+        sched.step()
+        if epoch % 10 == 0 or epoch == epochs:
+            print(f"    epoch {epoch}/{epochs} loss={run / args.steps:.4f}", flush=True)
+    return ema.state()
 
 
-def fit_and_score(X, Y, is_default, train_idx, val_idx):
-    model = TwoStageModel().fit(X.iloc[train_idx], Y.iloc[train_idx], is_default.iloc[train_idx])
-    th = tune_thresholds(model, X.iloc[val_idx], Y.iloc[val_idx])
-    model.thresholds = th
-    pred = model_predict(model.to_dict(), X.iloc[val_idx])
-    acc = {c: acc_single(c, pred[c].to_numpy(), Y.iloc[val_idx][c].to_numpy()) for c in TARGETS}
-    score = sum(WEIGHTS[c] * acc[c] for c in TARGETS) * 100.0
-    return score, acc, th
+def cv_report(X, Y, isdef, groups, folds):
+    gkf = GroupKFold(n_splits=folds)
+    scores = []
+    for fi, (tr_idx, va_idx) in enumerate(gkf.split(X, Y, groups), start=1):
+        model = TwoStageModel(monotonic=True).fit(X.iloc[tr_idx], Y.iloc[tr_idx], isdef.iloc[tr_idx])
+        accs = {}
+        for c in TARGETS:
+            p = model.classifiers[c].predict_proba(X.iloc[va_idx])[:, 1]
+            reg = inverse_transform_target(
+                c, pd.Series(model.regressors[c].predict(X.iloc[va_idx]), index=X.iloc[va_idx].index)
+            ).to_numpy()
+            pred = np.where(p >= FINAL_THRESHOLDS[c], DEFAULT_VALUES[c], reg)
+            accs[c] = acc_single(c, pred, Y.iloc[va_idx][c].to_numpy())
+        s = sum(WEIGHTS[c] * accs[c] for c in TARGETS) * 100
+        scores.append(s)
+        print(f"  fold{fi}: total={s:.3f} " + " ".join(f"{c}={accs[c]:.4f}" for c in TARGETS))
+    print(f"树模型 CV: {np.mean(scores):.3f} ± {np.std(scores):.3f}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", default="./train")
     ap.add_argument("--out_dir", default="./models")
-    ap.add_argument("--cv_folds", type=int, default=5)
-    ap.add_argument("--random_state", type=int, default=42)
+    ap.add_argument("--cv_folds", type=int, default=0)
+    ap.add_argument("--with_tcn", type=int, default=1)
+    ap.add_argument("--epochs1", type=int, default=80)
+    ap.add_argument("--epochs2", type=int, default=60)
+    ap.add_argument("--steps", type=int, default=60)
+    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--window", type=int, default=1024)
+    ap.add_argument("--ch", type=int, default=128)
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
     wells = load_wells(args.data_dir, has_labels=True)
     df = pd.concat(wells, ignore_index=True)
     print(f"训练井数: {len(wells)}  总深度点: {len(df):,}")
-
-    X = make_features(df)
+    X = make_features(df, context=True, priors=True)
     Y = make_targets(df)
-    is_default = default_mask(Y)
+    isdef = default_mask(Y)
     groups = df["logId"].to_numpy()
 
-    gkf = GroupKFold(n_splits=args.cv_folds)
-    fold_scores, fold_thresholds = [], []
-    for fold, (tr_idx, va_idx) in enumerate(gkf.split(X, Y, groups), start=1):
-        score, acc, th = fit_and_score(X, Y, is_default, tr_idx, va_idx)
-        fold_scores.append(score)
-        fold_thresholds.append(th)
-        print(
-            f"Fold {fold}: total={score:.3f}  POR={acc['POR']:.4f}  "
-            f"PERM={acc['PERM']:.4f}  SW={acc['SW']:.4f}  "
-            f"th={ {k: round(v, 2) for k, v in th.items()} }"
+    if args.cv_folds > 0:
+        print(f"树模型 {args.cv_folds} 折 CV:")
+        cv_report(X, Y, isdef, groups, args.cv_folds)
+
+    print("全量训练树模型 ...")
+    tree = TwoStageModel(thresholds=dict(FINAL_THRESHOLDS), monotonic=True).fit(X, Y, isdef)
+
+    model_dict = tree.to_dict()
+    scaler_dict = {
+        "feature_columns": list(X.columns),
+        "default_values": DEFAULT_VALUES,
+    }
+
+    use_tcn = bool(args.with_tcn) and _HAS_TORCH
+    if bool(args.with_tcn) and not _HAS_TORCH:
+        print("警告: 未安装 torch, 跳过 TCN 阶段（退化为树模型）")
+    if use_tcn:
+        import torch
+
+        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        print("device:", device)
+        base = make_features(df, context=False, priors=True)
+        medians, stds = base.median(), base.std()
+        data = build_wells(wells, medians, stds)
+        lengths = np.array([len(w["X"]) for w in data], dtype=np.float64)
+        weights = lengths / lengths.sum()
+        n_feat = data[0]["X"].shape[1]
+
+        print(f"TCN pass1: {args.epochs1} epochs ...")
+        sd1 = train_tcn(data, lengths, weights, n_feat, args, device, args.epochs1, channels=False, seed=args.seed)
+        channels = {}
+        for w in data:
+            o = numpy_forward_tcn(w["X"], sd1, list(DILATIONS) * 2)
+            channels[w["logId"]] = {c: causal_smooth(o[c][:, 1]) for c in TARGETS}
+        print(f"TCN pass2: {args.epochs2} epochs (自回归通道) ...")
+        data2 = build_wells(wells, medians, stds, channels=channels)
+        sd2 = train_tcn(data2, lengths, weights, n_feat + len(TARGETS), args, device, args.epochs2, channels=True, seed=args.seed + 1)
+
+        model_dict.update(
+            tcn_sd=sd1,
+            tcn_dilations=list(DILATIONS) * 2,
+            tcn2_sd=sd2,
+            tcn2_dilations=list(DILATIONS) * 2,
+            blend_w=list(FINAL_BLEND_W),
+        )
+        scaler_dict.update(
+            tcn_medians=medians,
+            tcn_stds=stds,
+            tcn_feature_columns=list(base.columns),
         )
 
-    mean_score = float(np.mean(fold_scores))
-    print(f"平均 CV 总分: {mean_score:.3f}  (std={np.std(fold_scores):.3f})")
-
-    final_th = {c: float(np.median([t[c] for t in fold_thresholds])) for c in TARGETS}
-    print("最终阈值:", {k: round(v, 3) for k, v in final_th.items()})
-
-    print("在全量训练集上训练最终模型 ...")
-    final_model = TwoStageModel(thresholds=final_th).fit(X, Y, is_default)
-
     os.makedirs(args.out_dir, exist_ok=True)
-    joblib.dump(final_model.to_dict(), os.path.join(args.out_dir, "model.pkl"))
-    joblib.dump(
-        {
-            "feature_columns": list(X.columns),
-            "default_values": DEFAULT_VALUES,
-            "output_clip": OUTPUT_CLIP,
-        },
-        os.path.join(args.out_dir, "scaler.pkl"),
-    )
-    print(f"模型已保存到 {args.out_dir}")
+    joblib.dump(model_dict, os.path.join(args.out_dir, "model.pkl"))
+    joblib.dump(scaler_dict, os.path.join(args.out_dir, "scaler.pkl"))
+    print(f"模型已保存到 {args.out_dir} (tcn={use_tcn})")
 
 
 if __name__ == "__main__":
     main()
-

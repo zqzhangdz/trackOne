@@ -110,23 +110,43 @@ def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> 
     """
     mode = model.get("target_transform", "perm_log")
     out = pd.DataFrame(index=X.index)
-    tcn_log = None
+    regs_log: list[dict[str, np.ndarray]] = []
     if model.get("tcn_sd") is not None and X_tcn is not None:
-        o = numpy_forward_tcn(X_tcn.to_numpy(dtype=np.float32), model["tcn_sd"], model["tcn_dilations"])
-        tcn_log = {c: o[c][:, 1] for c in TARGETS}
-    w_tcn = float(model.get("blend_w", 0.5))
+        x0 = X_tcn.to_numpy(dtype=np.float32)
+        o1 = numpy_forward_tcn(x0, model["tcn_sd"], model["tcn_dilations"])
+        regs_log.append({c: o1[c][:, 1] for c in TARGETS})
+        if model.get("tcn2_sd") is not None:
+            # pass2 通道 = pass1 回归值按井因果平滑（与训练一致, win=9）
+            ch = np.stack([_causal_smooth9(o1[c][:, 1]) for c in TARGETS], axis=1)
+            o2 = numpy_forward_tcn(
+                np.concatenate([x0, ch.astype(np.float32)], axis=1),
+                model["tcn2_sd"], model["tcn2_dilations"],
+            )
+            regs_log.append({c: o2[c][:, 1] for c in TARGETS})
+    blend_w = model.get("blend_w")
+    if blend_w is None:
+        blend_w = [1.0 - 0.5 * len(regs_log)] + [0.5 / max(1, len(regs_log))] * len(regs_log) if regs_log else [1.0]
     for c in TARGETS:
         p_def = model["classifiers"][c].predict_proba(X)[:, 1]
         is_def = p_def >= model["thresholds"][c]
         reg_raw = model["regressors"][c].predict(X)
         reg_phys = inverse_transform_target(c, pd.Series(reg_raw, index=X.index), mode).to_numpy()
         reg_log = np.log10(np.maximum(reg_phys, EPS))
-        if tcn_log is not None:
-            reg_log = (1.0 - w_tcn) * reg_log + w_tcn * tcn_log[c]
+        if regs_log:
+            reg_log = blend_w[0] * reg_log + sum(w * r[c] for w, r in zip(blend_w[1:], regs_log))
             reg_phys = np.power(10.0, reg_log)
         lo, hi = OUTPUT_CLIP[c]
         out[c] = np.clip(np.where(is_def, DEFAULT_VALUES[c], reg_phys), lo, hi)
     return out
+
+
+def _causal_smooth9(arr: np.ndarray) -> np.ndarray:
+    """按井因果移动平均(win=9), 与 M4 pass2 训练通道一致."""
+    csum = np.cumsum(np.concatenate([[0.0], arr.astype(np.float64)]))
+    n = np.arange(1, arr.size + 1)
+    w = np.minimum(n, 9)
+    idx = np.maximum(n - 9, 0)
+    return ((csum[1:] - csum[idx]) / w).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -169,3 +189,54 @@ def numpy_forward_tcn(x: np.ndarray, sd: dict, dilations: list[int]) -> dict[str
     var = h.var(axis=1, keepdims=True)
     h = _gelu_np((h - mu) / np.sqrt(var + 1e-5) * gw + gb)
     return {c: _linear_np(h, sd[f"heads.{c}.weight"], sd[f"heads.{c}.bias"]) for c in TARGETS}
+
+
+# ---------------------------------------------------------------------------
+# torch TCN 定义（训练用；torch 缺失时静默降级，推理仅需上方 numpy 前向）
+# ---------------------------------------------------------------------------
+try:  # pragma: no cover - 环境相关
+    import torch as _torch
+    import torch.nn as _nn
+    import torch.nn.functional as _F
+    _HAS_TORCH = True
+except Exception:  # pragma: no cover
+    _torch = _nn = _F = None
+    _HAS_TORCH = False
+
+if _HAS_TORCH:
+
+    class TCNBlock(_nn.Module):
+        def __init__(self, ch: int, dilation: int, dropout: float = 0.1):
+            super().__init__()
+            self.conv = _nn.Conv1d(ch, ch, kernel_size=5, padding=2 * dilation, dilation=dilation)
+            self.norm = _nn.LayerNorm(ch)
+            self.drop = _nn.Dropout(dropout)
+
+        def forward(self, x):
+            h = self.conv(x).transpose(1, 2)
+            h = self.drop(_F.gelu(self.norm(h), approximate="tanh")).transpose(1, 2)
+            return x + h
+
+    class TCNNet(_nn.Module):
+        """非因果(双向) TCN：逐点输出 3 目标 [logit_default, reg_log10]."""
+
+        def __init__(self, n_features: int, ch: int = 128, dilations=(1, 2, 4, 8, 16), repeats: int = 2, dropout: float = 0.1):
+            super().__init__()
+            self.in_proj = _nn.Linear(n_features, ch)
+            blocks = []
+            for _ in range(repeats):
+                for d in dilations:
+                    blocks.append(TCNBlock(ch, d, dropout))
+            self.blocks = _nn.ModuleList(blocks)
+            self.out_norm = _nn.LayerNorm(ch)
+            self.heads = _nn.ModuleDict({c: _nn.Linear(ch, 2) for c in TARGETS})
+
+        def forward(self, x):
+            h = self.in_proj(x).transpose(1, 2)
+            for b in self.blocks:
+                h = b(h)
+            h = _F.gelu(self.out_norm(h.transpose(1, 2)), approximate="tanh")
+            return {c: self.heads[c](h) for c in TARGETS}
+
+    def export_to_numpy(model) -> dict:
+        return {k: v.detach().cpu().numpy() for k, v in model.state_dict().items()}
