@@ -1,0 +1,6 @@
+model_dir: models
+model_file: model.pkl
+scaler_file: scaler.pkl
+modelName: TwoStageHistGradientBoosting
+version: "1.0"
+

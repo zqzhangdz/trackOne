@@ -1,0 +1,24 @@
+{
+  "modelId": "",
+  "modelName": "模型名称",
+  "version": "1.0",
+  "resultData": [
+    {
+      "logId": "39dc13c9ca1e4f0eb5f9cb311fe564c3",
+      "predictions": [
+        {
+          "depth": 505.0,
+          "POR": 0.1,
+          "PERM": 12.35,
+          "SW": 0.426
+        },
+        {
+          "depth": 505.1,
+          "POR": 0.102,
+          "PERM": 13.02,
+          "SW": 0.431
+        }
+      ]
+    }
+  ]
+}

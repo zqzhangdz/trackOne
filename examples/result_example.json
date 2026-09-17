@@ -1,0 +1,30 @@
+{
+  "modelId": "",
+  "modelName": "TwoStageHistGradientBoosting",
+  "version": "1.0",
+  "resultData": [
+    {
+      "logId": "d122f5424b9e4984a8f701d16c2d5b58",
+      "predictions": [
+        {
+          "depth": 1117.1,
+          "POR": 21.7214,
+          "PERM": 16.624,
+          "SW": 79.0923
+        },
+        {
+          "depth": 1117.2,
+          "POR": 21.2998,
+          "PERM": 16.4908,
+          "SW": 81.0157
+        },
+        {
+          "depth": 1117.3,
+          "POR": 21.1543,
+          "PERM": 22.6796,
+          "SW": 83.9353
+        }
+      ]
+    }
+  ]
+}

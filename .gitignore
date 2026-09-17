@@ -1,0 +1,14 @@
+# 数据与大型产物（可再生，不入库）
+train/
+test/
+result.json
+*.zip
+artifacts/
+artifacts_seq/
+artifacts_seq_smoke/
+artifacts_seq_smoke2/
+artifacts_ar_smoke/
+__pycache__/
+*.pyc
+.DS_Store
+experiments/runs/
