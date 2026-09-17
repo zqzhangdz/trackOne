@@ -17,14 +17,14 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupKFold
 
 from src.feature import default_mask, inverse_transform_target, load_wells, make_features, make_targets, transform_target
 from src.model import (
     EPS,
     TARGETS,
     TwoStageModel,
-    _HAS_TORCH,
+    get_tcn_classes,
+    has_torch,
     numpy_forward_tcn,
 )
 from src.utils import DEFAULT_VALUES, TOLERANCE, WEIGHTS, acc_single
@@ -116,16 +116,34 @@ def sample_batch(data, lengths, weights, L, batch, rng, use_ch=False, p_true=Non
 
 def train_tcn(data, lengths, weights, n_features, args, device, epochs, channels=False, seed=42):
     import torch
+
+    if lengths is None:
+        lengths = np.array([len(w["X"]) for w in data], dtype=np.float64)
+        weights = lengths / lengths.sum()
     import torch.nn.functional as F
 
-    from src.model import TCNNet
+    TCNNet = get_tcn_classes()["TCNNet"]
 
+    import os as _os
+
+    if _os.environ.get("TRAIN_DEBUG"):
+        import faulthandler as _fh
+
+        _fh.enable()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
+    if os.environ.get("TRAIN_DEBUG"):
+        print("    [dbg] build model", flush=True)
     model = TCNNet(n_features, ch=args.ch, dilations=DILATIONS, repeats=2).to(device)
+    if os.environ.get("TRAIN_DEBUG"):
+        print("    [dbg] ema", flush=True)
     ema = EMA(model)
+    if os.environ.get("TRAIN_DEBUG"):
+        print("    [dbg] opt", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
+    if os.environ.get("TRAIN_DEBUG"):
+        print("    [dbg] pos_weight", flush=True)
     pos_weight = {}
     for c in TARGETS:
         nd = sum(float(w[f"{c}_def"].sum()) for w in data)
@@ -134,7 +152,9 @@ def train_tcn(data, lengths, weights, n_features, args, device, epochs, channels
     for epoch in range(1, epochs + 1):
         model.train()
         run = 0.0
-        for _ in range(args.steps):
+        for si in range(args.steps):
+            if os.environ.get("TRAIN_DEBUG"):
+                print(f"    [dbg] step {si}", flush=True)
             b = sample_batch(data, lengths, weights, args.window, args.batch, rng, use_ch=channels)
             bt = {k: torch.from_numpy(v).to(device) for k, v in b.items()}
             x = torch.cat([bt["X"], bt["CH"]], dim=-1) if channels else bt["X"]
@@ -162,6 +182,8 @@ def train_tcn(data, lengths, weights, n_features, args, device, epochs, channels
 
 
 def cv_report(X, Y, isdef, groups, folds):
+    from sklearn.model_selection import GroupKFold
+
     gkf = GroupKFold(n_splits=folds)
     scores = []
     for fi, (tr_idx, va_idx) in enumerate(gkf.split(X, Y, groups), start=1):
@@ -186,6 +208,12 @@ def main() -> None:
     ap.add_argument("--out_dir", default="./models")
     ap.add_argument("--cv_folds", type=int, default=0)
     ap.add_argument("--with_tcn", type=int, default=1)
+    ap.add_argument(
+        "--stage",
+        choices=["all", "tree", "tcn1", "tcn2", "assemble"],
+        default="all",
+        help="all 时以子进程依次执行各阶段（隔离 sklearn/torch 的 OpenMP 运行时，避免死锁）",
+    )
     ap.add_argument("--epochs1", type=int, default=80)
     ap.add_argument("--epochs2", type=int, default=60)
     ap.add_argument("--steps", type=int, default=60)
@@ -194,71 +222,107 @@ def main() -> None:
     ap.add_argument("--ch", type=int, default=128)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--device", choices=["cpu", "mps"], default="cpu",
+                    help="TCN 训练设备；默认 cpu 以规避 macOS MPS 驱动与 OpenMP 的交互问题")
     args = ap.parse_args()
 
+    if args.stage == "all":
+        import subprocess
+        import sys
+
+        base_cmd = [sys.executable, os.path.abspath(__file__)]
+        for k, v in vars(args).items():
+            if k == "stage":
+                continue
+            base_cmd += [f"--{k}", str(v)]
+        stages = ["tree"] + (["tcn1", "tcn2"] if args.with_tcn and has_torch() else []) + ["assemble"]
+        for st in stages:
+            print(f"=== stage {st} ===", flush=True)
+            subprocess.run(base_cmd + ["--stage", st], check=True)
+        return
+
+    stage_dir = os.path.join(args.out_dir, ".staging")
+    os.makedirs(stage_dir, exist_ok=True)
     wells = load_wells(args.data_dir, has_labels=True)
     df = pd.concat(wells, ignore_index=True)
-    print(f"训练井数: {len(wells)}  总深度点: {len(df):,}")
-    X = make_features(df, context=True, priors=True)
-    Y = make_targets(df)
-    isdef = default_mask(Y)
-    groups = df["logId"].to_numpy()
 
-    if args.cv_folds > 0:
-        print(f"树模型 {args.cv_folds} 折 CV:")
-        cv_report(X, Y, isdef, groups, args.cv_folds)
+    if args.stage == "tree":
+        print(f"训练井数: {len(wells)}  总深度点: {len(df):,}")
+        X = make_features(df, context=True, priors=True)
+        Y = make_targets(df)
+        isdef = default_mask(Y)
+        if args.cv_folds > 0:
+            print(f"树模型 {args.cv_folds} 折 CV:")
+            cv_report(X, Y, isdef, df["logId"].to_numpy(), args.cv_folds)
+        print("全量训练树模型 ...", flush=True)
+        tree = TwoStageModel(thresholds=dict(FINAL_THRESHOLDS), monotonic=True).fit(X, Y, isdef)
+        joblib.dump(
+            {
+                "model_dict": tree.to_dict(),
+                "feature_columns": list(X.columns),
+            },
+            os.path.join(stage_dir, "tree.joblib"),
+        )
+        print("tree stage done", flush=True)
+        return
 
-    print("全量训练树模型 ...")
-    tree = TwoStageModel(thresholds=dict(FINAL_THRESHOLDS), monotonic=True).fit(X, Y, isdef)
-
-    model_dict = tree.to_dict()
-    scaler_dict = {
-        "feature_columns": list(X.columns),
-        "default_values": DEFAULT_VALUES,
-    }
-
-    use_tcn = bool(args.with_tcn) and _HAS_TORCH
-    if bool(args.with_tcn) and not _HAS_TORCH:
-        print("警告: 未安装 torch, 跳过 TCN 阶段（退化为树模型）")
-    if use_tcn:
+    if args.stage in ("tcn1", "tcn2"):
         import torch
 
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        print("device:", device)
+        device = torch.device(args.device)
+        print("device:", device, flush=True)
         base = make_features(df, context=False, priors=True)
         medians, stds = base.median(), base.std()
-        data = build_wells(wells, medians, stds)
-        lengths = np.array([len(w["X"]) for w in data], dtype=np.float64)
-        weights = lengths / lengths.sum()
-        n_feat = data[0]["X"].shape[1]
+        if args.stage == "tcn1":
+            data = build_wells(wells, medians, stds)
+            n_feat = data[0]["X"].shape[1]
+            print(f"TCN pass1: {args.epochs1} epochs ...", flush=True)
+            sd1 = train_tcn(data, None, None, n_feat, args, device, args.epochs1, channels=False, seed=args.seed)
+            joblib.dump({"sd": sd1, "medians": medians, "stds": stds}, os.path.join(stage_dir, "tcn1.joblib"))
+        else:
+            art1 = joblib.load(os.path.join(stage_dir, "tcn1.joblib"))
+            medians, stds = art1["medians"], art1["stds"]
+            channels = {}
+            for w in wells:
+                Xw = make_features(w, context=False, priors=True).fillna(medians)
+                Xw = ((Xw - stds.replace(0, 1.0)) / stds.replace(0, 1.0)).to_numpy(dtype=np.float32)
+                o = numpy_forward_tcn(Xw, art1["sd"], list(DILATIONS) * 2)
+                channels[w["logId"].iloc[0]] = {c: causal_smooth(o[c][:, 1]) for c in TARGETS}
+            data = build_wells(wells, medians, stds, channels=channels)
+            n_feat = data[0]["X"].shape[1] + len(TARGETS)
+            print(f"TCN pass2: {args.epochs2} epochs (自回归通道) ...", flush=True)
+            sd2 = train_tcn(data, None, None, n_feat, args, device, args.epochs2, channels=True, seed=args.seed + 1)
+            joblib.dump({"sd": sd2}, os.path.join(stage_dir, "tcn2.joblib"))
+        print(f"{args.stage} stage done", flush=True)
+        return
 
-        print(f"TCN pass1: {args.epochs1} epochs ...")
-        sd1 = train_tcn(data, lengths, weights, n_feat, args, device, args.epochs1, channels=False, seed=args.seed)
-        channels = {}
-        for w in data:
-            o = numpy_forward_tcn(w["X"], sd1, list(DILATIONS) * 2)
-            channels[w["logId"]] = {c: causal_smooth(o[c][:, 1]) for c in TARGETS}
-        print(f"TCN pass2: {args.epochs2} epochs (自回归通道) ...")
-        data2 = build_wells(wells, medians, stds, channels=channels)
-        sd2 = train_tcn(data2, lengths, weights, n_feat + len(TARGETS), args, device, args.epochs2, channels=True, seed=args.seed + 1)
-
+    # assemble
+    tree_part = joblib.load(os.path.join(stage_dir, "tree.joblib"))
+    model_dict = tree_part["model_dict"]
+    scaler_dict = {
+        "feature_columns": tree_part["feature_columns"],
+        "default_values": DEFAULT_VALUES,
+    }
+    tcn1_path = os.path.join(stage_dir, "tcn1.joblib")
+    if os.path.exists(tcn1_path):
+        art1 = joblib.load(tcn1_path)
+        art2 = joblib.load(os.path.join(stage_dir, "tcn2.joblib"))
         model_dict.update(
-            tcn_sd=sd1,
+            tcn_sd=art1["sd"],
             tcn_dilations=list(DILATIONS) * 2,
-            tcn2_sd=sd2,
+            tcn2_sd=art2["sd"],
             tcn2_dilations=list(DILATIONS) * 2,
             blend_w=list(FINAL_BLEND_W),
         )
         scaler_dict.update(
-            tcn_medians=medians,
-            tcn_stds=stds,
-            tcn_feature_columns=list(base.columns),
+            tcn_medians=art1["medians"],
+            tcn_stds=art1["stds"],
+            tcn_feature_columns=list(make_features(df, context=False, priors=True).columns),
         )
-
     os.makedirs(args.out_dir, exist_ok=True)
     joblib.dump(model_dict, os.path.join(args.out_dir, "model.pkl"))
     joblib.dump(scaler_dict, os.path.join(args.out_dir, "scaler.pkl"))
-    print(f"模型已保存到 {args.out_dir} (tcn={use_tcn})")
+    print(f"模型已保存到 {args.out_dir} (tcn={os.path.exists(tcn1_path)})")
 
 
 if __name__ == "__main__":

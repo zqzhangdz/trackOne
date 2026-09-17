@@ -5,8 +5,10 @@ from __future__ import annotations
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
+# 注意: sklearn 采用懒加载（_clf/_reg 内部导入）。
+# 原因: 本模块同时被 torch 训练脚本导入; sklearn 的 OpenMP 运行时与 torch
+# 线程池同进程交互在 macOS 上会导致挂起/段错误（见 EXPERIMENTS.md）。
 from .feature import inverse_transform_target, transform_target
 from .utils import DEFAULT_VALUES, EPS, OUTPUT_CLIP, TARGETS
 
@@ -22,13 +24,17 @@ DEFAULT_REG_PARAMS = dict(
 POR_MONOTONIC = {"DEN": -1, "AC": 1}
 
 
-def _clf(params: dict | None = None) -> HistGradientBoostingClassifier:
+def _clf(params: dict | None = None):
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
     p = dict(DEFAULT_CLF_PARAMS)
     p.update(params or {})
     return HistGradientBoostingClassifier(loss="log_loss", random_state=42, **p)
 
 
-def _reg(params: dict | None = None, monotonic: dict | None = None, columns=None) -> HistGradientBoostingRegressor:
+def _reg(params: dict | None = None, monotonic: dict | None = None, columns=None):
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
     p = dict(DEFAULT_REG_PARAMS)
     p.update(params or {})
     if monotonic and columns is not None:
@@ -192,51 +198,64 @@ def numpy_forward_tcn(x: np.ndarray, sd: dict, dilations: list[int]) -> dict[str
 
 
 # ---------------------------------------------------------------------------
-# torch TCN 定义（训练用；torch 缺失时静默降级，推理仅需上方 numpy 前向）
+# torch TCN 定义（懒加载：训练进程按需导入 torch，避免与 sklearn 的 OpenMP
+# 运行时同进程冲突导致挂起/段错误，见 EXPERIMENTS.md）
 # ---------------------------------------------------------------------------
-try:  # pragma: no cover - 环境相关
-    import torch as _torch
-    import torch.nn as _nn
-    import torch.nn.functional as _F
-    _HAS_TORCH = True
-except Exception:  # pragma: no cover
-    _torch = _nn = _F = None
-    _HAS_TORCH = False
+_TCN_CACHE: dict = {}
 
-if _HAS_TORCH:
 
-    class TCNBlock(_nn.Module):
+def has_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def get_tcn_classes() -> dict:
+    """返回 {"TCNBlock", "TCNNet", "export_to_numpy"}；首次调用时导入 torch 并定义."""
+    if _TCN_CACHE:
+        return _TCN_CACHE
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+
+    class TCNBlock(nn.Module):
         def __init__(self, ch: int, dilation: int, dropout: float = 0.1):
             super().__init__()
-            self.conv = _nn.Conv1d(ch, ch, kernel_size=5, padding=2 * dilation, dilation=dilation)
-            self.norm = _nn.LayerNorm(ch)
-            self.drop = _nn.Dropout(dropout)
+            self.conv = nn.Conv1d(ch, ch, kernel_size=5, padding=2 * dilation, dilation=dilation)
+            self.norm = nn.LayerNorm(ch)
+            self.drop = nn.Dropout(dropout)
 
         def forward(self, x):
             h = self.conv(x).transpose(1, 2)
-            h = self.drop(_F.gelu(self.norm(h), approximate="tanh")).transpose(1, 2)
+            h = self.drop(F.gelu(self.norm(h), approximate="tanh")).transpose(1, 2)
             return x + h
 
-    class TCNNet(_nn.Module):
+    class TCNNet(nn.Module):
         """非因果(双向) TCN：逐点输出 3 目标 [logit_default, reg_log10]."""
 
         def __init__(self, n_features: int, ch: int = 128, dilations=(1, 2, 4, 8, 16), repeats: int = 2, dropout: float = 0.1):
             super().__init__()
-            self.in_proj = _nn.Linear(n_features, ch)
+            self.in_proj = nn.Linear(n_features, ch)
             blocks = []
             for _ in range(repeats):
                 for d in dilations:
                     blocks.append(TCNBlock(ch, d, dropout))
-            self.blocks = _nn.ModuleList(blocks)
-            self.out_norm = _nn.LayerNorm(ch)
-            self.heads = _nn.ModuleDict({c: _nn.Linear(ch, 2) for c in TARGETS})
+            self.blocks = nn.ModuleList(blocks)
+            self.out_norm = nn.LayerNorm(ch)
+            self.heads = nn.ModuleDict({c: nn.Linear(ch, 2) for c in TARGETS})
 
         def forward(self, x):
             h = self.in_proj(x).transpose(1, 2)
             for b in self.blocks:
                 h = b(h)
-            h = _F.gelu(self.out_norm(h.transpose(1, 2)), approximate="tanh")
+            h = F.gelu(self.out_norm(h.transpose(1, 2)), approximate="tanh")
             return {c: self.heads[c](h) for c in TARGETS}
 
     def export_to_numpy(model) -> dict:
         return {k: v.detach().cpu().numpy() for k, v in model.state_dict().items()}
+
+    _TCN_CACHE.update(TCNBlock=TCNBlock, TCNNet=TCNNet, export_to_numpy=export_to_numpy)
+    return _TCN_CACHE

@@ -2,4 +2,9 @@
 
 from __future__ import annotations
 
-from src.model import TCNNet, export_to_numpy, numpy_forward_tcn as numpy_forward  # noqa: F401
+from src.model import get_tcn_classes, numpy_forward_tcn as numpy_forward  # noqa: F401
+
+_tc = get_tcn_classes()
+TCNNet = _tc["TCNNet"]
+TCNBlock = _tc["TCNBlock"]
+export_to_numpy = _tc["export_to_numpy"]
