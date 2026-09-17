@@ -141,10 +141,13 @@ def tune_and_eval(model, X, Y, isdef, groups, seg, seg_win, p_stay):
 
 
 def run_fold(X, Y, isdef, tr_idx, va_idx, args):
+    shared = dict(max_leaf_nodes=args.leaf, min_samples_leaf=args.min_leaf)
     model = TwoStageModel(
         target_transform=args.ttransform,
         sample_weight=bool(args.weights),
         monotonic=bool(args.mono),
+        clf_params=dict(shared),
+        reg_params=dict(shared, max_iter=args.reg_iter, learning_rate=args.reg_lr),
     ).fit(X.iloc[tr_idx], Y.iloc[tr_idx], isdef.iloc[tr_idx])
     p_stay = {}
     for c in TARGETS:
@@ -175,6 +178,10 @@ def main() -> None:
     ap.add_argument("--mono", type=int, default=0)
     ap.add_argument("--seg", choices=["none", "median", "viterbi"], default="none")
     ap.add_argument("--seg_win", type=int, default=15)
+    ap.add_argument("--leaf", type=int, default=31)
+    ap.add_argument("--min_leaf", type=int, default=50)
+    ap.add_argument("--reg_iter", type=int, default=400)
+    ap.add_argument("--reg_lr", type=float, default=0.08)
     args = ap.parse_args()
 
     t0 = time.time()
@@ -220,6 +227,7 @@ def main() -> None:
         "tag": args.tag, "mode": args.mode, "folds": len(splits),
         "context": args.context, "priors": args.priors, "ttransform": args.ttransform,
         "weights": args.weights, "mono": args.mono, "seg": args.seg, "seg_win": args.seg_win,
+        "leaf": args.leaf, "min_leaf": args.min_leaf, "reg_iter": args.reg_iter, "reg_lr": args.reg_lr,
         "total": round(mean_total, 3), "std": round(std_total, 3),
         **{f"{c}_acc": round(mean_dec[c]["acc"], 4) for c in TARGETS},
         **{f"{c}_real": round(mean_dec[c]["acc_real"], 4) for c in TARGETS},
