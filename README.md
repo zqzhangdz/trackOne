@@ -2,30 +2,31 @@
 
 ## 一、算法名称
 
-基于默认/储层分段判别 + 梯度提升回归的测井储层参数预测模型。
+默认/储层分段判别 + 梯度提升树与双向 TCN 级联自回归融合的测井储层参数预测模型。
 
 ## 二、方法简介
 
-数据存在明显的“非储层默认段”与“储层真实段”二分结构：
+数据存在"非储层默认段"（POR=0.1 / PERM=0.01 / SW=99.9，占 66–72% 深度点）与
+"储层真实段"二分结构；真实段三目标沿深度高度平滑（lag-1 自相关 0.967）。
+据此采用三级结构：
 
-- POR 约 66.5% 深度点为默认值 0.1；
-- PERM 约 67.5% 深度点为默认值 0.01；
-- SW 约 71.7% 深度点为默认值 99.9。
+1. **分段判别**：逐目标 `HistGradientBoostingClassifier` 判别默认/真实段；
+   特征为 13 条曲线 + 派生电阻率特征 + 单井上下文特征（lag/lead ±1,2,3,5,10、
+   窗口 5/11/21 均值/标准差、一阶差分）+ 测井物理先验（密度/声波/中子孔隙度）；
+   真实段回归器施加 POR 对 DEN 单调减、对 AC 单调增约束。
+2. **双向 TCN pass1**：非因果时序卷积（感受野 ≈25 m）在 log10 空间回归三目标，
+   损失为指标对齐的截断相对误差（带内线性、带外截断）+ 默认段 BCE。
+3. **TCN pass2（级联自回归）**：将 pass1 预测按井因果平滑（win=9）作为额外输入
+   通道再回归，训练期以 scheduled sampling 从真实值通道退火到预测通道，
+   显式利用沿深度平滑先验并缓解暴露偏差。
+4. **融合与决策**：三源回归在 log10 空间按 0.4/0.3/0.3 加权；分段概率 ≥ 阈值
+   （验证集调优：POR 0.10、PERM 0.05、SW 0.05）输出默认常数，否则输出融合值。
 
-因此采用**逐目标两阶段**建模：
-
-1. 第一阶段用 `HistGradientBoostingClassifier` 判别某深度点是否为默认段；
-2. 第二阶段用 `HistGradientBoostingRegressor` 只对真实段回归；
-3. 推理时若判为默认段则直接输出默认常数，否则输出回归值。
-
-特征工程：剔除缺失率约 99% 的 `CASE`，保留 13 条输入曲线；将
-`-99999/-9999/-2.5346e37` 等哨兵值统一为缺失，`CNL` 做物理截断，并加入
-`logRT`、`logRXO`、`RT/RXO` 派生特征。`PERM` 在 log10 空间回归。
+推理全程纯 numpy（TCN 前向手写导出），提交包不依赖 torch。
 
 ## 三、运行环境
 
-- Python 3.10+
-- 依赖见 `requirements.txt`
+- Python 3.10+；依赖见 `requirements.txt`（训练 TCN 阶段另需 torch，缺失时自动退化为树模型）
 
 ## 四、运行命令
 
@@ -35,29 +36,23 @@
 python predict.py --data_dir ./data --output ./result.json
 ```
 
-可选参数：
+训练（复现模型；分阶段子进程执行以隔离 OpenMP 运行时）：
 
 ```bash
-python predict.py --data_dir ./data --output ./result.json --model_dir ./models --config ./config.yaml
-```
-
-训练（复现模型）：
-
-```bash
-python train.py --data_dir ./train --out_dir ./models --cv_folds 5
+python train.py --data_dir ./train --out_dir ./models --cv_folds 5 --with_tcn 1
 ```
 
 ## 五、文件说明
 
-- `predict.py`：主预测脚本，完成数据读取、预处理、模型加载、推理与结果生成。
-- `train.py`：训练脚本，按井 GroupKFold 交叉验证 + 阈值寻优，保存模型。
-- `config.yaml`：模型路径与参数配置。
-- `src/model.py`：两阶段模型定义与推理逻辑。
-- `src/feature.py`：数据读取、哨兵值处理、特征工程。
-- `src/utils.py`：配置常量、评价指标与通用工具。
-- `models/model.pkl`：训练好的模型权重。
-- `models/scaler.pkl`：特征列与预处理元信息。
-- `examples/result_example.json`：结果输出样例。
+- `predict.py`：主预测脚本（数据读取、预处理、模型加载、混合推理、结果生成）
+- `train.py`：训练脚本（树 CV/全量 + 两阶段 TCN + 工件组装）
+- `config.yaml`：模型路径、名称版本、特征开关
+- `src/model.py`：两阶段树模型、混合推理、纯 numpy TCN 前向、torch TCN 定义（懒加载）
+- `src/feature.py`：数据读取、哨兵值处理、点式/上下文/物理先验特征
+- `src/utils.py`：配置常量、官方评价指标、通用工具
+- `models/model.pkl`：树模型 + 两阶段 TCN 权重 + 融合权重 + 阈值
+- `models/scaler.pkl`：特征列与 TCN 输入标准化统计
+- `examples/result_example.json`：结果输出样例
 
 ## 六、评价指标
 
@@ -67,4 +62,3 @@ python train.py --data_dir ./train --out_dir ./models --cv_folds 5
 - `Acc_PERM = mean(max(0, 1 - |log10(max(ŷ,ε))-log10(max(y,ε))| / (0.08·(|log10(max(y,ε))|+ε))))`
 - `Acc_SW = mean(max(0, 1 - |ŷ-y| / (0.05·(|y|+ε))))`
 - `Total = (0.3·Acc_POR + 0.35·Acc_PERM + 0.35·Acc_SW) × 100`
-

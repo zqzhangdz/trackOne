@@ -21,6 +21,11 @@
 | smooth 3-25 | 融合回归按井窗口平滑 | 68.25→67.69 |  |  |  | **拒绝**: 平滑单调变差 |
 | T5_pass2 | M4 自回归通道+scheduled sampling |  |  |  |  | 进行中 |
 
+## 工程事故记录
+- macOS 同进程加载 sklearn(libomp) 与 torch 线程池会挂起/段错误（顺序敏感、无 Python 栈）。
+  对策: src/model.py 中 sklearn 与 torch 均懒加载; train.py 以子进程分阶段(tree/tcn1/tcn2/assemble),
+  每进程单一 OpenMP 运行时; TCN 训练默认 cpu。
+
 ## 观察
 - 上下文特征对三个目标的真实段均有提升（POR +0.019 / PERM +0.010 / SW +0.025），方向正确但幅度有限：点式+邻域仍远不及持久性上界(0.56-0.67)，M3 序列模型仍是主战役。
 - 物理先验在已有上下文特征后边际贡献≈0（树已能从邻域 DEN/AC 学到）。
