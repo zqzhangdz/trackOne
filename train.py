@@ -222,6 +222,8 @@ def main() -> None:
     ap.add_argument("--ch", type=int, default=128)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--weight_tol", type=int, default=1,
+                    help="真实段回归样本权重 ∝ 指标容差宽度（metric-aware 重要性加权）")
     ap.add_argument("--device", choices=["cpu", "mps"], default="cpu",
                     help="TCN 训练设备；默认 cpu 以规避 macOS MPS 驱动与 OpenMP 的交互问题")
     args = ap.parse_args()
@@ -256,6 +258,19 @@ def main() -> None:
             cv_report(X, Y, isdef, df["logId"].to_numpy(), args.cv_folds)
         print("全量训练树模型 ...", flush=True)
         tree = TwoStageModel(thresholds=dict(FINAL_THRESHOLDS), monotonic=True).fit(X, Y, isdef)
+        if args.weight_tol:
+            print("metric-aware 容差宽度加权重训真实段回归器 ...", flush=True)
+            for c in TARGETS:
+                valid = Y[c].notna().to_numpy()
+                y = Y.loc[valid, c]
+                def_ = isdef.loc[valid, c].astype(int).to_numpy()
+                real = def_ == 0
+                yv = y.to_numpy()[real]
+                w = np.abs(np.log10(np.maximum(yv, EPS))) if c == "PERM" else np.abs(yv)
+                w = np.clip(w, np.percentile(w, 5), np.percentile(w, 95))
+                w = w / w.mean()
+                yt = transform_target(c, y[real])
+                tree.regressors[c].fit(X.loc[valid][real], yt, sample_weight=w)
         joblib.dump(
             {
                 "model_dict": tree.to_dict(),
