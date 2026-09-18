@@ -96,10 +96,13 @@ class Scorer:
 
 def main():
     S = Scorer()
-    fam = {"A: T10+T11 (120ep)": ["T10_ln10", "T11_seed43_ln10"],
+    fam = {"A: T10+T11 (120+120)": ["T10_ln10", "T11_seed43_ln10"],
            "B: T12+T11 (200+120)": ["T12_seed42_200ep", "T11_seed43_ln10"],
            "C: T12+T10 (200+120)": ["T12_seed42_200ep", "T10_ln10"],
-           "D: T12+T10+T11": ["T12_seed42_200ep", "T10_ln10", "T11_seed43_ln10"]}
+           "D: T12+T10+T11": ["T12_seed42_200ep", "T10_ln10", "T11_seed43_ln10"],
+           "E: T12+T13 (200+200)": ["T12_seed42_200ep", "T13_seed43_200ep"],
+           "F: T12+T13+T11": ["T12_seed42_200ep", "T13_seed43_200ep", "T11_seed43_ln10"],
+           "G: all4": ["T10_ln10", "T11_seed43_ln10", "T12_seed42_200ep", "T13_seed43_200ep"]}
     full = np.ones(len(S.larr), bool)
     data = {}
     print("=== in-sample(8 井) tuned ===")
@@ -123,12 +126,15 @@ def main():
             vals.append(t)
         loo[name] = np.array(vals)
         print(f"  {name:22s} LOO mean={np.nanmean(vals):.3f}  per-well=" + " ".join(f"{v:.1f}" for v in vals))
-    A, B = loo["A: T10+T11 (120ep)"], loo["B: T12+T11 (200+120)"]
-    d = B - A
+    A = loo["A: T10+T11 (120+120)"]
     rng = np.random.default_rng(0)
-    boot = np.array([np.nanmean(d[rng.integers(0, len(d), len(d))]) for _ in range(5000)])
-    print(f"\nB-A (LOO): mean={np.nanmean(d):+.3f} boot95%=[{np.nanpercentile(boot,2.5):+.3f},{np.nanpercentile(boot,97.5):+.3f}] "
-          f"pos/neg={int(np.nansum(d>0))}/{int(np.nansum(d<0))}")
+    print("\n=== LOO 相对 A 的配对 bootstrap ===")
+    for name, vals in loo.items():
+        if name.startswith("A"): continue
+        d = vals - A
+        boot = np.array([np.nanmean(d[rng.integers(0, len(d), len(d))]) for _ in range(5000)])
+        print(f"  {name:24s} d={np.nanmean(d):+.3f} boot95%=[{np.nanpercentile(boot,2.5):+.3f},{np.nanpercentile(boot,97.5):+.3f}] "
+              f"pos/neg={int(np.nansum(d>0))}/{int(np.nansum(d<0))}")
 
 
 if __name__ == "__main__":
