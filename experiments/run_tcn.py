@@ -28,7 +28,7 @@ from src.feature import default_mask, load_wells, make_features, make_targets
 from src.utils import DEFAULT_VALUES, EPS, TARGETS, TOLERANCE, WEIGHTS
 from solution.tcn_model import TCNNet, export_to_numpy, numpy_forward
 
-LN10 = float(np.log10(np.e)) * np.log(10)  # = ln(10)
+LN10 = float(np.log(np.float64(10.0)))  # ln(10): 把 log10 空间残差换算成线性相对误差
 RUNS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
 RESULTS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results.csv")
 
