@@ -16,11 +16,12 @@
    真实段回归器施加 POR 对 DEN 单调减、对 AC 单调增约束。
 2. **双向 TCN pass1**：非因果时序卷积（感受野 ≈25 m）在 log10 空间回归三目标，
    损失为指标对齐的截断相对误差（带内线性、带外截断）+ 默认段 BCE。
-3. **TCN pass2（级联自回归）**：将 pass1 预测按井因果平滑（win=9）作为额外输入
-   通道再回归，训练期以 scheduled sampling 从真实值通道退火到预测通道，
-   显式利用沿深度平滑先验并缓解暴露偏差。
-4. **融合与决策**：三源回归在 log10 空间按 0.4/0.3/0.3 加权；分段概率 ≥ 阈值
-   （验证集调优：POR 0.10、PERM 0.05、SW 0.05）输出默认常数，否则输出融合值。
+3. **融合与决策**：树回归与 TCN 回归在 log10 空间按 0.3/0.7 加权；分段概率 ≥ 阈值
+   （验证集调优：POR 0.10–0.15、PERM 0.05、SW 0.05）输出默认常数，否则输出融合值。
+   真实段回归采用 metric-aware 训练：样本权重 ∝ 指标容差宽度（POR/SW 为 |y|、
+   PERM 为 |log10 y|），把模型容量集中在"能得分"的深度点。
+   （可选 pass2：以 pass1 因果平滑预测为通道的级联自回归 TCN，`train.py --with_pass2 1`；
+   验证集无增益，默认关闭。）
 
 推理全程纯 numpy（TCN 前向手写导出），提交包不依赖 torch。
 
@@ -50,7 +51,7 @@ python train.py --data_dir ./train --out_dir ./models --cv_folds 5 --with_tcn 1
 - `src/model.py`：两阶段树模型、混合推理、纯 numpy TCN 前向、torch TCN 定义（懒加载）
 - `src/feature.py`：数据读取、哨兵值处理、点式/上下文/物理先验特征
 - `src/utils.py`：配置常量、官方评价指标、通用工具
-- `models/model.pkl`：树模型 + 两阶段 TCN 权重 + 融合权重 + 阈值
+- `models/model.pkl`：树模型 + TCN 权重（可选 pass2）+ 融合权重 + 阈值
 - `models/scaler.pkl`：特征列与 TCN 输入标准化统计
 - `examples/result_example.json`：结果输出样例
 
