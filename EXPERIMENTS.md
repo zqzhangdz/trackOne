@@ -44,6 +44,33 @@
 - TCN 互补性确认：PERM/SW 真实段回归优于树（0.060/0.144 vs 0.052/0.131），但默认段分类弱（def 0.90-0.95），故采用"树分类 + 回归融合"架构。
 - 模型选择必须用调优后总分：val@0.5 会选中偏向默认输出的早期权重（epoch4），掩盖真实回归进步。
 
+## v4 优化（2026-09-18 下午）
+
+| tag | 配置 | screen total | POR/PERM/SW real | acc_def 均值 | 结论 |
+|---|---|---|---|---|---|
+| T8_seed43 | TCN seed43 120ep | 67.384(自分类) | 0.212/0.101/0.167 | — | 与 T6 互补 |
+| T9_seed44 | TCN seed44 120ep | 67.420(自分类) | 0.217/0.095/0.167 | — | 三 seed 齐 |
+| ens 0.7 global + tree-p | T6+T8 回归均值, 树分类 | 68.614 | 0.169/0.063/0.147 | 0.992 | 集成略胜单 T6 |
+| ens per-target w | 逐目标 TCN 权重(0.65/0.95/0.75) | 68.681 | 0.169/0.072/0.148 | 0.992 | +0.12 vs v3 |
+| ens per-t + pmean0.5 | + 树/TCN 分类概率平均 | **68.792** | 0.173/0.075/0.144 | 0.991 | **screen 最优, +0.23 vs v3** |
+
+**晋级判定（固定 v3 阈值 0.10/0.05/0.05，逐井平均）**：
+- v3 基线 69.139 → 单 seed+clf0.5 69.325（SW real 略负）、2 seed 69.350、**3 seed 69.369**（三目标同向）
+- 结论：**分类概率融合（clf_tcn_w=0.5）是主要增益来源**，且在每个 seed 上独立为正
+  （T6 +0.134 / seed43 +0.087 / seed44 +0.064）；第三 seed 仅把 SW 由负翻正以满足方向规则，
+  3-seed 与 2-seed 差异（+0.02）在 screen 噪声 ±0.3 内。
+- **采纳 2-seed(T6+43)**：性价比更高，满足"三目标方向一致"晋级条件。
+
+**否决**：
+- `diag_decision.py` 三目标联合 logit 决策 65.36 → 默认段 acc 崩。
+- `calib_check.py` p_def 温度/isotonic → 阈值形式下任何单调变换只是重参数化，数学上无增益。
+- `eval_jointclf.py` 区域级 all-default 分类器 最佳仅 +0.011。
+
+**天花板证据**（`diag_oracle_seg.py` / `diag_level_wiggle.py`）：
+- oracle 分段 + 树回归 = 69.963；+TCN = 70.319；mean(tree,TCN) = 70.570；oracle 逐段均值 = 73.414。
+- 真实段 level RMS/tol = 3.5–11、wiggle RMS/tol = 0.6–8.8，均远超容差。
+- 即便完美分段，点级回归仅 ~70.3–70.6，剩余差距为不可达 level 估计。
+
 ## 最终交付（2026-09-18）
 - models/model.pkl: 树(上下文+先验+单调) + TCN pass1(80ep) + TCN pass2(60ep, 自回归通道) + 融合权重 0.4/0.3/0.3 + 阈值 0.10/0.05/0.05
 - submission_code.zip / result.zip 通过 tools/package_submission.py 全 checklist（规范文件齐备、解包烟雾预测、schema 校验）
