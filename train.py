@@ -31,7 +31,7 @@ from src.utils import DEFAULT_VALUES, TOLERANCE, WEIGHTS, acc_single
 
 # 验证切分上调优得到的决策阈值（见 EXPERIMENTS.md）
 FINAL_THRESHOLDS = {"POR": 0.10, "PERM": 0.05, "SW": 0.05}
-FINAL_BLEND_W = [0.4, 0.3, 0.3]  # tree / tcn pass1 / tcn pass2
+FINAL_BLEND_W = [0.4, 0.3, 0.3]  # tree / tcn pass1 / tcn pass2（三路时使用）
 DILATIONS = (1, 2, 4, 8, 16)
 SMOOTH_WIN = 9
 LN10 = float(np.log(np.float64(10.0)))
@@ -214,7 +214,9 @@ def main() -> None:
         default="all",
         help="all 时以子进程依次执行各阶段（隔离 sklearn/torch 的 OpenMP 运行时，避免死锁）",
     )
-    ap.add_argument("--epochs1", type=int, default=80)
+    ap.add_argument("--epochs1", type=int, default=120)
+    ap.add_argument("--with_pass2", type=int, default=0, help="是否训练/使用自回归 pass2（screen 验证无增益，默认关）")
+    ap.add_argument("--w_tcn", type=float, default=0.7, help="两路融合时 TCN 权重")
     ap.add_argument("--epochs2", type=int, default=60)
     ap.add_argument("--steps", type=int, default=60)
     ap.add_argument("--batch", type=int, default=16)
@@ -237,7 +239,8 @@ def main() -> None:
             if k == "stage":
                 continue
             base_cmd += [f"--{k}", str(v)]
-        stages = ["tree"] + (["tcn1", "tcn2"] if args.with_tcn and has_torch() else []) + ["assemble"]
+        tcn_stages = ["tcn1"] + (["tcn2"] if args.with_pass2 else []) if args.with_tcn and has_torch() else []
+        stages = ["tree"] + tcn_stages + ["assemble"]
         for st in stages:
             print(f"=== stage {st} ===", flush=True)
             subprocess.run(base_cmd + ["--stage", st], check=True)
@@ -321,14 +324,20 @@ def main() -> None:
     tcn1_path = os.path.join(stage_dir, "tcn1.joblib")
     if os.path.exists(tcn1_path):
         art1 = joblib.load(tcn1_path)
-        art2 = joblib.load(os.path.join(stage_dir, "tcn2.joblib"))
         model_dict.update(
             tcn_sd=art1["sd"],
             tcn_dilations=list(DILATIONS) * 2,
-            tcn2_sd=art2["sd"],
-            tcn2_dilations=list(DILATIONS) * 2,
-            blend_w=list(FINAL_BLEND_W),
         )
+        tcn2_path = os.path.join(stage_dir, "tcn2.joblib")
+        if os.path.exists(tcn2_path):
+            art2 = joblib.load(tcn2_path)
+            model_dict.update(
+                tcn2_sd=art2["sd"],
+                tcn2_dilations=list(DILATIONS) * 2,
+                blend_w=list(FINAL_BLEND_W),
+            )
+        else:
+            model_dict["blend_w"] = [1.0 - args.w_tcn, args.w_tcn]
         scaler_dict.update(
             tcn_medians=art1["medians"],
             tcn_stds=art1["stds"],

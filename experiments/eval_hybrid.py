@@ -18,7 +18,26 @@ from src.feature import default_mask, inverse_transform_target, load_wells, make
 from src.model import TwoStageModel
 from src.utils import DEFAULT_VALUES, EPS, TARGETS, TOLERANCE, WEIGHTS
 from solution.tcn_model import numpy_forward
-from experiments.run_tcn import decompose, pointwise
+
+
+def pointwise(c, pred, true):
+    p = np.asarray(pred, float)
+    t = np.asarray(true, float)
+    if c == "PERM":
+        p = np.log10(np.maximum(p, EPS))
+        t = np.log10(np.maximum(t, EPS))
+    return np.maximum(0.0, 1.0 - np.abs(p - t) / (TOLERANCE[c] * (np.abs(t) + EPS)))
+
+
+def decompose(c, pred, y, isdef):
+    valid = ~np.isnan(y)
+    d = valid & isdef
+    r = valid & ~isdef
+    return {
+        "acc": pointwise(c, pred[valid], y[valid]).mean(),
+        "acc_def": pointwise(c, pred[d], y[d]).mean() if d.sum() else float("nan"),
+        "acc_real": pointwise(c, pred[r], y[r]).mean() if r.sum() else float("nan"),
+    }
 
 RUNS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
 
@@ -40,7 +59,7 @@ def tcn_regs(wells_df_ids, va_df, va_wells, art, channels=None):
     return regs
 
 
-def main():
+def main(t3_tag="T3_sel80", t5_tag="T5_pass2", weight_tol=False):
     wells = load_wells("./train", has_labels=True)
     ids = [w["logId"].iloc[0] for w in wells]
     tr = [w for w in wells if w["logId"].iloc[0] in set(ids[:72])]
@@ -50,14 +69,26 @@ def main():
     Xva = make_features(va_df, context=True, priors=True)
     Ytr, Yva = make_targets(tr_df), make_targets(va_df)
     model = TwoStageModel(monotonic=True).fit(Xtr, Ytr, default_mask(Ytr))
+    if weight_tol:
+        for c in TARGETS:
+            valid = Ytr[c].notna().to_numpy()
+            y = Ytr.loc[valid, c]
+            def_ = default_mask(Ytr).loc[valid, c].astype(int).to_numpy()
+            real = def_ == 0
+            yv = y.to_numpy()[real]
+            w = np.abs(np.log10(np.maximum(yv, EPS))) if c == "PERM" else np.abs(yv)
+            w = np.clip(w, np.percentile(w, 5), np.percentile(w, 95))
+            w = w / w.mean()
+            from src.feature import transform_target as _tt
+            model.regressors[c].fit(Xtr.loc[valid][real], _tt(c, y[real]), sample_weight=w)
     p_def = {c: model.classifiers[c].predict_proba(Xva)[:, 1] for c in TARGETS}
     reg_tree = {c: np.log10(np.maximum(inverse_transform_target(
         c, pd.Series(model.regressors[c].predict(Xva), index=Xva.index)).to_numpy(), EPS)) for c in TARGETS}
 
-    art3 = joblib.load(os.path.join(RUNS, "tcn_T3_sel80.joblib"))
+    art3 = joblib.load(os.path.join(RUNS, f"tcn_{t3_tag}.joblib"))
     reg3 = tcn_regs(None, va_df, va, art3)
     reg5 = None
-    p5 = os.path.join(RUNS, "tcn_T5_pass2.joblib")
+    p5 = os.path.join(RUNS, f"tcn_{t5_tag}.joblib")
     if os.path.exists(p5):
         art5 = joblib.load(p5)
         ch = joblib.load(os.path.join(RUNS, f"pass1_val_{art5['pass1_tag']}.joblib"))
@@ -95,7 +126,7 @@ def main():
     if len(names) >= 2:
         weights_grid = []
         for combo in itertools.combinations(names, 2):
-            for w in (0.3, 0.5, 0.7):
+            for w in (0.2, 0.3, 0.4, 0.5, 0.7, 0.8):
                 weights_grid.append(({combo[0]: 1 - w, combo[1]: w}, f"{combo[0]}{1 - w:.1f}+{combo[1]}{w:.1f}"))
         if len(names) == 3:
             for w3 in ((0.4, 0.3, 0.3), (0.34, 0.33, 0.33), (0.2, 0.4, 0.4), (0.5, 0.25, 0.25)):
@@ -111,4 +142,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--t3_tag", default="T3_sel80")
+    ap.add_argument("--t5_tag", default="T5_pass2")
+    ap.add_argument("--weight_tol", type=int, default=0)
+    a = ap.parse_args()
+    main(a.t3_tag, a.t5_tag, bool(a.weight_tol))
