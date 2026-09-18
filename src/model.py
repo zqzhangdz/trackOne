@@ -117,21 +117,29 @@ def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> 
     mode = model.get("target_transform", "perm_log")
     out = pd.DataFrame(index=X.index)
     regs_log: list[dict[str, np.ndarray]] = []
-    if model.get("tcn_sd") is not None and X_tcn is not None:
+    dils = model.get("tcn_dilations")
+    if X_tcn is not None:
         x0 = X_tcn.to_numpy(dtype=np.float32)
-        o1 = numpy_forward_tcn(x0, model["tcn_sd"], model["tcn_dilations"])
-        regs_log.append({c: o1[c][:, 1] for c in TARGETS})
-        if model.get("tcn2_sd") is not None:
-            # pass2 通道 = pass1 回归值按井因果平滑（与训练一致, win=9）
-            ch = np.stack([_causal_smooth9(o1[c][:, 1]) for c in TARGETS], axis=1)
-            o2 = numpy_forward_tcn(
-                np.concatenate([x0, ch.astype(np.float32)], axis=1),
-                model["tcn2_sd"], model["tcn2_dilations"],
-            )
-            regs_log.append({c: o2[c][:, 1] for c in TARGETS})
+        # 多 seed 集成：tcn_sds 为状态字典列表（可含 pass2 通道）；单 seed 时退化为 tcn_sd
+        sds = model.get("tcn_sds")
+        if sds is None and model.get("tcn_sd") is not None:
+            sds = [model["tcn_sd"]]
+        if sds:
+            o1 = None
+            for sd in sds:
+                o1 = numpy_forward_tcn(x0, sd, dils)
+                regs_log.append({c: o1[c][:, 1] for c in TARGETS})
+            if model.get("tcn2_sd") is not None and o1 is not None:
+                ch = np.stack([_causal_smooth9(o1[c][:, 1]) for c in TARGETS], axis=1)
+                o2 = numpy_forward_tcn(
+                    np.concatenate([x0, ch.astype(np.float32)], axis=1),
+                    model["tcn2_sd"], model["tcn2_dilations"],
+                )
+                regs_log.append({c: o2[c][:, 1] for c in TARGETS})
     blend_w = model.get("blend_w")
+    npaths = len(regs_log)
     if blend_w is None:
-        blend_w = [1.0 - 0.5 * len(regs_log)] + [0.5 / max(1, len(regs_log))] * len(regs_log) if regs_log else [1.0]
+        blend_w = [1.0 - 0.5 * npaths] + [0.5 / max(1, npaths)] * npaths if npaths else [1.0]
     for c in TARGETS:
         p_def = model["classifiers"][c].predict_proba(X)[:, 1]
         is_def = p_def >= model["thresholds"][c]
@@ -139,7 +147,8 @@ def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> 
         reg_phys = inverse_transform_target(c, pd.Series(reg_raw, index=X.index), mode).to_numpy()
         reg_log = np.log10(np.maximum(reg_phys, EPS))
         if regs_log:
-            reg_log = blend_w[0] * reg_log + sum(w * r[c] for w, r in zip(blend_w[1:], regs_log))
+            bw = blend_w[c] if isinstance(blend_w, dict) else blend_w
+            reg_log = bw[0] * reg_log + sum(w * r[c] for w, r in zip(bw[1:], regs_log))
             reg_phys = np.power(10.0, reg_log)
         lo, hi = OUTPUT_CLIP[c]
         out[c] = np.clip(np.where(is_def, DEFAULT_VALUES[c], reg_phys), lo, hi)

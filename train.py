@@ -224,6 +224,8 @@ def main() -> None:
     ap.add_argument("--ch", type=int, default=128)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--seed_list", default="", help="逗号分隔的多 seed 列表；非空时训练 TCN 集成（覆盖 --seed）")
+    ap.add_argument("--per_target_w", default="", help="逐目标融合权重 POR:PERM:SW，如 0.3,0.6,0.7（第二项为 TCN 权重）")
     ap.add_argument("--weight_tol", type=int, default=1,
                     help="真实段回归样本权重 ∝ 指标容差宽度（metric-aware 重要性加权）")
     ap.add_argument("--device", choices=["cpu", "mps"], default="cpu",
@@ -294,9 +296,13 @@ def main() -> None:
         if args.stage == "tcn1":
             data = build_wells(wells, medians, stds)
             n_feat = data[0]["X"].shape[1]
-            print(f"TCN pass1: {args.epochs1} epochs ...", flush=True)
-            sd1 = train_tcn(data, None, None, n_feat, args, device, args.epochs1, channels=False, seed=args.seed)
-            joblib.dump({"sd": sd1, "medians": medians, "stds": stds}, os.path.join(stage_dir, "tcn1.joblib"))
+            seeds = [int(x) for x in args.seed_list.split(",") if x.strip()] or [args.seed]
+            sds = []
+            for sd_i in seeds:
+                print(f"TCN pass1 seed={sd_i}: {args.epochs1} epochs ...", flush=True)
+                sds.append(train_tcn(data, None, None, n_feat, args, device, args.epochs1, channels=False, seed=sd_i))
+            joblib.dump({"sd": sds[0], "sds": sds, "seeds": seeds, "medians": medians, "stds": stds},
+                        os.path.join(stage_dir, "tcn1.joblib"))
         else:
             art1 = joblib.load(os.path.join(stage_dir, "tcn1.joblib"))
             medians, stds = art1["medians"], art1["stds"]
@@ -324,20 +330,31 @@ def main() -> None:
     tcn1_path = os.path.join(stage_dir, "tcn1.joblib")
     if os.path.exists(tcn1_path):
         art1 = joblib.load(tcn1_path)
+        sds = art1.get("sds", [art1["sd"]])
         model_dict.update(
             tcn_sd=art1["sd"],
+            tcn_sds=sds,
             tcn_dilations=list(DILATIONS) * 2,
         )
         tcn2_path = os.path.join(stage_dir, "tcn2.joblib")
+        npaths = len(sds)
+        w_tcn = args.w_tcn
+        base_w = [1.0 - w_tcn] + [w_tcn / npaths] * npaths
+        if args.per_target_w:
+            base_w = None
+            vals = [float(x) for x in args.per_target_w.split(",")]
+            if len(vals) != len(TARGETS):
+                raise ValueError("--per_target_w 需要 3 个取值")
+            model_dict["blend_w"] = {c: [1.0 - v] + [v / npaths] * npaths for c, v in zip(TARGETS, vals)}
         if os.path.exists(tcn2_path):
             art2 = joblib.load(tcn2_path)
             model_dict.update(
                 tcn2_sd=art2["sd"],
                 tcn2_dilations=list(DILATIONS) * 2,
-                blend_w=list(FINAL_BLEND_W),
             )
-        else:
-            model_dict["blend_w"] = [1.0 - args.w_tcn, args.w_tcn]
+            model_dict.setdefault("blend_w", list(FINAL_BLEND_W))
+        elif "blend_w" not in model_dict:
+            model_dict["blend_w"] = base_w
         scaler_dict.update(
             tcn_medians=art1["medians"],
             tcn_stds=art1["stds"],
