@@ -228,6 +228,7 @@ def main() -> None:
     ap.add_argument("--per_target_w", default="", help="逐目标融合权重 POR:PERM:SW，如 0.3,0.6,0.7（第二项为 TCN 权重）")
     ap.add_argument("--clf_tcn_w", type=float, default=0.0,
                     help="TCN 分类概率 p_def 的融合权重（0=纯树分类，0.5=树/TCN 概率平均）")
+    ap.add_argument("--thresholds", default="", help="决策阈值覆盖 POR:PERM:SW，如 0.10,0.05,0.05（空=用默认）")
     ap.add_argument("--weight_tol", type=int, default=1,
                     help="真实段回归样本权重 ∝ 指标容差宽度（metric-aware 重要性加权）")
     ap.add_argument("--device", choices=["cpu", "mps"], default="cpu",
@@ -363,6 +364,11 @@ def main() -> None:
             model_dict["blend_w"] = base_w
         if args.clf_tcn_w:
             model_dict["clf_tcn_w"] = args.clf_tcn_w
+        if args.thresholds:
+            vals = [float(x) for x in args.thresholds.split(",")]
+            if len(vals) != len(TARGETS):
+                raise ValueError("--thresholds 需要 3 个取值 POR:PERM:SW")
+            model_dict["thresholds"] = {c: v for c, v in zip(TARGETS, vals)}
         scaler_dict.update(
             tcn_medians=art1["medians"],
             tcn_stds=art1["stds"],
