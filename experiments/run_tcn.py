@@ -255,7 +255,7 @@ def main():
                     y = w[f"{c}_y"]
                     m = ~np.isnan(y)
                     accs.append(pointwise(c, pred[m], y[m]).mean())
-                best_a = max(best_a, float(np.mean(accs)))
+                best_a = max(best_a, float(np.nanmean(accs)))  # nanmean: 退化井(目标全 NaN)不应污染
             tot += WEIGHTS[c] * best_a
         tot *= 100.0
         print(f"  epoch {ep}: tuned={tot:.3f}", flush=True)
@@ -298,7 +298,7 @@ def main():
                 y = w[f"{c}_y"]
                 m = ~np.isnan(y)
                 accs.append(pointwise(c, pred[m], y[m]).mean())
-            a = float(np.mean(accs))
+            a = float(np.nanmean(accs))  # nanmean: 避免退化井使 SW 阈值调优失效
             if a > best_a:
                 best_a, best_t = a, float(t)
         th[c] = best_t
