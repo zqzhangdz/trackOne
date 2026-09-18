@@ -82,7 +82,8 @@ def main():
             a, t = best_acc(c, regmap, pmap)
             d = dec_of(c, regmap, pmap, t)
             parts[c] = (d, t); tot += WEIGHTS[c]*d["acc"]
-        print(f"{name:24s}: {tot*100:.3f} real=(" + ",".join(f"{parts[c][0]['real']:.4f}" for c in TARGETS)
+        print(f"{name:24s}: {tot*100:.3f} acc=(" + ",".join(f"{parts[c][0]['acc']:.4f}" for c in TARGETS)
+              + ") real=(" + ",".join(f"{parts[c][0]['real']:.4f}" for c in TARGETS)
               + ") def=(" + ",".join(f"{parts[c][0]['def']:.4f}" for c in TARGETS)
               + ") th=(" + ",".join(f"{parts[c][1]:.2f}" for c in TARGETS) + ")")
         return tot*100
