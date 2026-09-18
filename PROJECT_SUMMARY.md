@@ -1,6 +1,6 @@
 # 赛道一「储层参数（POR/PERM/SW）智能预测」项目总结
 
-> 更新时间：2026-09-18 ｜ git：main 分支 15 次提交 ｜ 当前交付版本：v3
+> 更新时间：2026-09-19 ｜ git：main 分支 ｜ 当前交付版本：v5
 
 ---
 
@@ -108,21 +108,25 @@ PERM 在 log10 空间且分母含 |log10 y|（y≈1 的点容差趋近 0，几�
 | 基线：点式两阶段树 | 67.330 | 70.63 ± 1.43 | 0.127/0.042/0.106 | 历史起点 |
 | M1：上下文+先验+单调约束 | 68.020 | **72.18 ± 1.51** | 0.150/0.052/0.131 | 唯一完整 CV 验证 |
 | v2：三路融合（树0.4/T3 0.3/T5 0.3） | 68.284 | ≈72.4（估计） | 0.161/0.059/0.138 | 已交付（被 v3 取代） |
-| **v3：两路（树0.3/T6 0.7）+ metric-aware** | **68.545** | ≈72.7（估计） | 0.173/0.065/0.148 | **当前交付** |
+| v3：两路（树0.3/T6 0.7）+ metric-aware | 68.545 | ≈72.7（估计） | 0.173/0.065/0.148 | 已交付（被 v4/v5 取代） |
+| v4：2 seed TCN + 逐目标融合 + clf 概率融合 | 68.757（buggy 口径） | — | 0.166/0.070/0.149 | 已交付（被 v5 取代） |
+| **v5：3 seed TCN(150ep) + 逐目标融合 + clf0.55** | **68.753**（可部署标量口径；固定权重 68.710） | — | 0.170/0.073/0.143 | **当前交付** |
 | 参考上界：纯默认输出 | 69.20 | — | — | 默认段即满分 |
 | 参考上界：真段均值 oracle | ≈75.4 | — | 0.178/0.311/0.233 | 纯测井信息天花板量级 |
 | 参考上界：持久性 y[t-1] oracle | ≈87 | — | 0.668/0.598/0.560 | 需真实历史目标，不可达 |
 
 ### 4.2 交付物状态
 
-- `submission_code.zip`（9.76 MB）：规范 11+1 文件齐备、顶层无多余项；解包后烟雾预测 10 井通过；推理零 torch 依赖。
-- `result.zip`（0.58 MB）：10 井 95,948 点，schema/升序校验通过；三默认占比 0.764（逐井 0.65–0.85，井间异质合理）。
-- git：15 次提交覆盖基线→M1→M3/M4→工程修复→v2→M6/M7→v3；数据与大型工件已 gitignore。
-- 复现：`python train.py --data_dir ./train --out_dir ./models --with_tcn 1`（约 40 min，MPS）→ `python predict.py --data_dir ./test --output ./result.json`。
+- `submission_code.zip`：规范 11+1 文件齐备、顶层无多余项；解包后烟雾预测 10 井通过；推理零 torch 依赖。
+- `result.zip`：10 井 95,948 点，schema/升序校验通过；version 标签 5.0。
+- git：覆盖基线→M1→M3/M4→工程修复→v2→v3→v4→v5；数据与大型工件已 gitignore。
+- 复现（v5，约 1.5–2 h MPS）：
+  `python train.py --data_dir ./train --out_dir ./models --with_tcn 1 --epochs1 150 --seed_list 42,43,44 --per_target_w 0.55,0.95,0.85 --thresholds 0.12,0.07,0.04 --clf_tcn_w 0.55 --device mps`
+  → `python predict.py --data_dir ./test --output ./result.json` → `python tools/package_submission.py --workdir .`。
 
 ---
 
-## 五、应用算法（v3 最终架构）
+## 五、应用算法（v5 架构；v3 起主干未变，仅更新融合/种子/阈值）
 
 1. **分段判别（树）**：逐目标 `HistGradientBoostingClassifier`（上下文特征）判别默认/真实；
    特征 = 13 曲线 + logRT/logRXO/RT/RXO + 单井上下文（lag/lead ±1,2,3,5,10、窗口 5/11/21 均值/标准差、一阶差分、rel_depth）+ 物理先验（POR_D/POR_S/POR_avg/POR_ds）。
