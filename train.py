@@ -336,7 +336,11 @@ def main() -> None:
             tcn_sds=sds,
             tcn_dilations=list(DILATIONS) * 2,
         )
+        # 仅当本次显式训练并启用 pass2 时才使用 tcn2，避免误用 .staging 中的陈旧工件
+        # （历史事故：v3 FINAL2 只跑 tree+tcn1，却因残留 tcn2.joblib 被静默拼成三路）
         tcn2_path = os.path.join(stage_dir, "tcn2.joblib")
+        if not args.with_pass2:
+            tcn2_path = os.path.join(stage_dir, "__pass2_disabled__")
         npaths = len(sds)
         w_tcn = args.w_tcn
         base_w = [1.0 - w_tcn] + [w_tcn / npaths] * npaths
