@@ -26,6 +26,12 @@
 | **FINAL2** | weight_tol树0.3+T6 0.7, 全量重训 | **68.545** | 0.173 | 0.065 | 0.148 | **v3 交付**; CV 估计 ≈72.7 |
 
 ## 工程事故记录
+- **交付事故（v4 期间发现并修复，commit 48151d8）**：`train.py` assemble 阶段只要
+  `models/.staging/tcn2.joblib` **文件存在**就会拼入 pass2 并置 `blend_w=[0.4,0.3,0.3]`。
+  v3 的 FINAL2 只跑 tree+tcn1（`--with_pass2 0`），但 03:21 的陈旧 tcn2.joblib 残留，
+  导致 v3 提交的 models/model.pkl 实为**三路 v2 架构**（含过时 pass2 头），与台账宣称的
+  两路 0.3/0.7 不一致。修复：assemble 以 `--with_pass2` 门控 tcn2，缺省不使用；
+  并已用现有 staging(tree+tcn1) 重装正确 v3（blend 0.3/0.7）。教训：交付工件必须与评估配置同源。
 - macOS 同进程加载 sklearn(libomp) 与 torch 线程池会挂起/段错误（顺序敏感、无 Python 栈）。
   对策: src/model.py 中 sklearn 与 torch 均懒加载; train.py 以子进程分阶段(tree/tcn1/tcn2/assemble),
   每进程单一 OpenMP 运行时; TCN 训练默认 cpu。

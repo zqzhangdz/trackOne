@@ -117,6 +117,7 @@ def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> 
     mode = model.get("target_transform", "perm_log")
     out = pd.DataFrame(index=X.index)
     regs_log: list[dict[str, np.ndarray]] = []
+    p_clf_tcn: dict[str, list[np.ndarray]] = {c: [] for c in TARGETS}
     dils = model.get("tcn_dilations")
     if X_tcn is not None:
         x0 = X_tcn.to_numpy(dtype=np.float32)
@@ -129,6 +130,8 @@ def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> 
             for sd in sds:
                 o1 = numpy_forward_tcn(x0, sd, dils)
                 regs_log.append({c: o1[c][:, 1] for c in TARGETS})
+                for c in TARGETS:
+                    p_clf_tcn[c].append(_sigmoid_np(o1[c][:, 0]))
             if model.get("tcn2_sd") is not None and o1 is not None:
                 ch = np.stack([_causal_smooth9(o1[c][:, 1]) for c in TARGETS], axis=1)
                 o2 = numpy_forward_tcn(
@@ -142,6 +145,12 @@ def predict(model: dict, X: pd.DataFrame, X_tcn: pd.DataFrame | None = None) -> 
         blend_w = [1.0 - 0.5 * npaths] + [0.5 / max(1, npaths)] * npaths if npaths else [1.0]
     for c in TARGETS:
         p_def = model["classifiers"][c].predict_proba(X)[:, 1]
+        # 可选：树 p_def 与 TCN p_def 概率平均（clf_tcn_w 为 TCN 权重，逐目标或标量）
+        cw_all = model.get("clf_tcn_w")
+        if cw_all is not None and p_clf_tcn[c]:
+            cw = cw_all[c] if isinstance(cw_all, dict) else float(cw_all)
+            if cw > 0:
+                p_def = (1.0 - cw) * p_def + cw * np.mean(p_clf_tcn[c], axis=0)
         is_def = p_def >= model["thresholds"][c]
         reg_raw = model["regressors"][c].predict(X)
         reg_phys = inverse_transform_target(c, pd.Series(reg_raw, index=X.index), mode).to_numpy()
@@ -167,6 +176,10 @@ def _causal_smooth9(arr: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # 纯 numpy TCN 推理（提交包不依赖 torch；与 solution/tcn_model.py 的 torch 定义逐层一致）
 # ---------------------------------------------------------------------------
+
+def _sigmoid_np(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))
+
 
 def _linear_np(x: np.ndarray, w: np.ndarray, b: np.ndarray) -> np.ndarray:
     return x @ w.T + b

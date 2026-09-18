@@ -226,6 +226,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--seed_list", default="", help="逗号分隔的多 seed 列表；非空时训练 TCN 集成（覆盖 --seed）")
     ap.add_argument("--per_target_w", default="", help="逐目标融合权重 POR:PERM:SW，如 0.3,0.6,0.7（第二项为 TCN 权重）")
+    ap.add_argument("--clf_tcn_w", type=float, default=0.0,
+                    help="TCN 分类概率 p_def 的融合权重（0=纯树分类，0.5=树/TCN 概率平均）")
     ap.add_argument("--weight_tol", type=int, default=1,
                     help="真实段回归样本权重 ∝ 指标容差宽度（metric-aware 重要性加权）")
     ap.add_argument("--device", choices=["cpu", "mps"], default="cpu",
@@ -359,6 +361,8 @@ def main() -> None:
             model_dict.setdefault("blend_w", list(FINAL_BLEND_W))
         elif "blend_w" not in model_dict:
             model_dict["blend_w"] = base_w
+        if args.clf_tcn_w:
+            model_dict["clf_tcn_w"] = args.clf_tcn_w
         scaler_dict.update(
             tcn_medians=art1["medians"],
             tcn_stds=art1["stds"],
