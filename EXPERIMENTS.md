@@ -72,6 +72,17 @@
 - 即便完美分段，点级回归仅 ~70.3–70.6，剩余差距为不可达 level 估计。
 
 ## 最终交付（2026-09-18）
+
+### v4 交付（最新）
+- models/model.pkl: weight_tol 树 + **2 seed TCN(T6+seed43) 状态字典平均**；逐目标融合权重
+  （POR 树0.40/TCN0.60、PERM 树0.05/TCN0.95、SW 树0.25/TCN0.75）；
+  默认段分类概率 = 树0.5+TCN0.5 平均；阈值 0.10/0.05/0.05。
+- **screen 68.757**（vs v3 68.544，+0.213）；real 三目标全为正：
+  POR 0.1662(→+0.0013)、PERM 0.0700(→+0.0055)、SW 0.1489(→+0.0013)，满足晋级规则。
+- predict() 已用纯 numpy 双 seed 前向验证与手写参考逐元素一致（误差 0）；parity 测试 <1e-4。
+
+### v3 交付（历史，含已修复事故）
+
 - models/model.pkl: 树(上下文+先验+单调) + TCN pass1(80ep) + TCN pass2(60ep, 自回归通道) + 融合权重 0.4/0.3/0.3 + 阈值 0.10/0.05/0.05
 - submission_code.zip / result.zip 通过 tools/package_submission.py 全 checklist（规范文件齐备、解包烟雾预测、schema 校验）
 - 分数路径: 基线 CV 70.63 → M1 树 CV 72.18 → 混合 screen +0.26 → 提交估计 ≈72.4
