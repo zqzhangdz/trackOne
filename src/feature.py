@@ -21,13 +21,16 @@ from .utils import (
 
 # 参与上下文特征的曲线（DEPTH 只做 lag 无意义，单独处理）
 CURVE_COLS = ["GR", "PE", "SP", "CAL", "AC", "DEN", "CNL", "RXO", "RT", "DEVI", "AZIM", "BIT"]
-# v8：窗口从 ±10/w21 放宽到 ±60/w41（225 → 321 特征）。POR lag-1 自相关 0.967，
-# 相关长度 ≈ 30 点，±10 处仍有 72% 相关被丢在窗外。依据见
-# experiments/runs/ctx_width.log 与 ctx_width_jackknife.log（screen 73.749 → 73.832，
-# 留一井 jackknife [+0.047, +0.111]）。树与 TCN 特征通路独立（predict.py 里 TCN 走
-# context=False），所以只改这里不影响 TCN 权重。
-LAG_OFFSETS = [-60, -30, -20, -10, -5, -3, -2, -1, 1, 2, 3, 5, 10, 20, 30, 60]
-WIN_SIZES = [5, 11, 21, 41]
+# v9：上下文回到 v7 的 ±10 / w21（225 特征），另加 12 列逐井 z 分数（{c}_wz，见
+# _context_for_well 末尾）→ 237 特征。
+#
+# v8 把窗口放宽到 ±60 / w41（321 特征）在 harness 上 +0.065（73.760 → 73.825），但
+# 225 + 逐井 z 分数在**同一 harness、同一重拟合**下是 73.931（+0.171 vs 73.760），
+# 321 + 逐井 z 分数只有 73.892 —— 宽上下文被证明是负资产：±60 m 内高度冗余的局部细节
+# 稀释了电平偏移这条真正的新信号。留一井包络 [+0.126, +0.183] 不跨 0、7/8 井为正。
+# 依据见 experiments/runs/wellnorm.json、wellnorm_v8.log 与 CLAUDE.md §4.14。
+LAG_OFFSETS = [-10, -5, -3, -2, -1, 1, 2, 3, 5, 10]
+WIN_SIZES = [5, 11, 21]
 
 
 def _is_sentinel(s: pd.Series) -> pd.Series:
@@ -77,6 +80,16 @@ def _context_for_well(g: pd.DataFrame) -> pd.DataFrame:
             cols[f"{c}_wmean{w}"] = r.mean().to_numpy()
             cols[f"{c}_wstd{w}"] = r.std().fillna(0.0).to_numpy()
         cols[f"{c}_diff1"] = s.diff(1).to_numpy()
+    # 逐井 z 分数（12 列，追加在末尾）：本井电平偏移。统计量只用本井数据，推理可用，
+    # 无标签泄漏。每口井的电平基线本身就是储层/井型信息 —— 所以这里是「追加」而
+    # 不是「替换」原始曲线：替换会把绝对刻度抹掉，实测 POR AUC 0.8966 → 0.8619。
+    # 见 experiments/tunex_wellnorm.py 与 CLAUDE.md §4.14。
+    for c in CURVE_COLS:
+        s = g[c]
+        mu = s.mean()
+        sd = s.std(ddof=0)                      # ddof=0 对齐 np.nanstd
+        sd = float(sd) if (pd.notna(sd) and sd > 0) else 1.0
+        cols[f"wellz_{c}"] = ((s - mu) / sd).to_numpy()
     return pd.DataFrame(cols, index=g.index)
 
 

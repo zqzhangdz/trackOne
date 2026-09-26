@@ -2,7 +2,7 @@ model_dir: models
 model_file: model.pkl
 scaler_file: scaler.pkl
 modelName: TwoStageHistGB_BiTCN_Ens_PerTargetBlend
-version: "8.0"
+version: "9.0"
 # 树模型特征开关（训练/推理必须一致）
 feature_context: true
 feature_priors: true
