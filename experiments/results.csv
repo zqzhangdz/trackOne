@@ -69,3 +69,4 @@ perm_oracle_segmean,perm_oracle,1,1,1,perm_log,真值段均值,1,0.0,0.0,0.0,0.0
 selector_72w,selector_screen,1,1,1,perm_log,HistGB 8候选 72井拟合,1,56.27,0.0,0.5933,0.3733,0.6811,0.0,0.0,0.0,0.0,0.0,0.0
 V6_official_best_wth,official_screen,1,1,1,perm_log,w .5/.5/.75 th .13/.27/.05 cw .6/.7/.3,1,73.749,0.0,0.6607,0.7738,0.767,0.0,0.0,0.0,0.0,0.0,0.0
 V6_oracle_seg_same_model,official_screen_oracleSeg,1,1,1,perm_log,真值分段+同回归器,1,76.308,0.0,0.6882,0.8072,0.7831,0.0,0.0,0.0,0.0,0.0,0.0
+V7_official_best_wth,official_screen,1,1,1,perm_log,w .50/.50/.75 th .13/.27/.05 cw .60/.70/.30,1,73.749,0.0,0.6607,0.7738,0.767,0.0,0.0,0.0,0.0,0.0,0.0
