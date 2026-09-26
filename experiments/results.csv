@@ -74,5 +74,6 @@ V8_clf_bal_v7th,official_screen,1,1,1,perm_log,clf bal(balanced) + weight_tol回
 V8_clf_best_cands,official_screen,1,1,1,perm_log,clf mw05/mw/cross+reg @各自最优th (联合过拟合 未落地),1,73.862,0.0,0.6628,0.7743,0.7679,0.0,0.0,0.0,0.0,0.0,0.0
 V9_decstruct_best,official_screen,1,1,1,perm_log,viterbi_lam0.05 (未落地),1,73.755,0.0,0.6607,0.7739,0.7671,0.0,0.0,0.0,0.0,0.0,0.0
 V9_decstruct_worst,official_screen,1,1,1,perm_log,consensus pm/th中位,1,66.005,0.0,0.6009,0.6247,0.7461,0.0,0.0,0.0,0.0,0.0,0.0
-V9_ctxwidth_best,official_screen,1,1,1,perm_log,±60/w41 ctx (未落地),1,73.832,0.0,0.6614,0.7741,0.7685,0.0,0.0,0.0,0.0,0.0,0.0
+V9_ctxwidth_best,official_screen,1,1,1,perm_log,±60/w41 ctx 阈值0.08/0.28/0.05 (已落地 v8),1,73.832,0.0,0.6614,0.7741,0.7685,0.0,0.0,0.0,0.0,0.0,0.0
 V7_OFFICIAL_BBOARD,official_test10w,1,1,1,perm_log,v7 已提交 官方75.73 提升6.2542% 晋级,1,75.73,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+V8_SUBMITTED_PENDING_OFFICIAL,submitted_test10w_pending,1,1,1,perm_log,v8 已提交 ±60/w41 321特征 官方分待公布,1,pending,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0

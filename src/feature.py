@@ -21,8 +21,13 @@ from .utils import (
 
 # 参与上下文特征的曲线（DEPTH 只做 lag 无意义，单独处理）
 CURVE_COLS = ["GR", "PE", "SP", "CAL", "AC", "DEN", "CNL", "RXO", "RT", "DEVI", "AZIM", "BIT"]
-LAG_OFFSETS = [-10, -5, -3, -2, -1, 1, 2, 3, 5, 10]
-WIN_SIZES = [5, 11, 21]
+# v8：窗口从 ±10/w21 放宽到 ±60/w41（225 → 321 特征）。POR lag-1 自相关 0.967，
+# 相关长度 ≈ 30 点，±10 处仍有 72% 相关被丢在窗外。依据见
+# experiments/runs/ctx_width.log 与 ctx_width_jackknife.log（screen 73.749 → 73.832，
+# 留一井 jackknife [+0.047, +0.111]）。树与 TCN 特征通路独立（predict.py 里 TCN 走
+# context=False），所以只改这里不影响 TCN 权重。
+LAG_OFFSETS = [-60, -30, -20, -10, -5, -3, -2, -1, 1, 2, 3, 5, 10, 20, 30, 60]
+WIN_SIZES = [5, 11, 21, 41]
 
 
 def _is_sentinel(s: pd.Series) -> pd.Series:

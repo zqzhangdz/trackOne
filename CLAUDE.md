@@ -13,14 +13,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `result.zip` | 内含单个 `result.json`，10 口测试井逐深度点预测，schema 不得增删改任何字段 |
 | `submission_code.zip` | 严格按下方 §3.2 的 11 个文件树，可一键复现：`python predict.py --data_dir ./data --output ./result.json` |
 
-**B 榜实测（2026-09-26，v7 已提交并晋级）：v7 = 75.73 分，提升百分比 6.2542%，晋级决赛。**
+**B 榜实测（2026-09-26）：v7 = 75.73 分，提升百分比 6.2542%，晋级决赛。**
 同榜另一队 68.70 分、提升 0%、未晋级。所以两个数字必须分开看：
 
 - **提升百分比的分母 ≈ 71.27**（75.73 / 1.062542）。这是"基线模型得分"，不是晋级线。
 - **晋级线在 (68.70, 75.73] 之间**，最可能仍是 75 分。我们过了，另一队没过。
 
+**v8 已于同日重新提交（±60/w41 上下文窗口，version 8.0），官方分待公布。**
+v7 的 75.73 仍是已确认的晋级成绩；`*.v7bak` 三级备份可回滚。
+
 本文件 §4 早期写的"基线 75 分"把这两个量混为一谈了。当前状态见 §4，screen 分数与
-官方分数的对应关系见 §4.12。
+官方分数的对应关系见 §4.12，v8 落地见 §4.13。
 
 工作协议（每一轮优化都按此走）：
 1. **复核评分标准** —— 任何"分数"主张必须先确认用的是官方口径（§2），不是自造变体。
@@ -96,20 +99,28 @@ README.md 必须含：算法名称、方法简介、运行环境（Python 版本
 分数系统性偏低约 4.5 分，并据此得出过"75 分线不可达、别再训练"的**错误结论**。
 旧口径数字一律标 `旧`，仅供追溯。详见 §2 与 §11。
 
-**当前交付 v7**：成员与 v5/v6 完全相同（`weight_tol` 树 + 3 seed TCN 42/43/44 × 150 epoch），
-**唯一改动是官方口径下重调 PERM 阈值 0.065 → 0.27**（零 GPU）。v7 已提交（`5ef3a76`），
-`result.zip` / `submission_code.zip`（version 7.0）均已生成：
+**当前交付 v8**（2026-09-26）：在 v7 基础上把上下文窗口从 ±10/w21（225 特征）放宽到
+**±60/w41（321 特征）**，阈值改为 {0.080, 0.280, 0.050}，融合权重不变。详见 §4.13。
+72 井 harness screen **73.832**（留一井 jackknife [+0.047, +0.111]），**官方分数待公布**。
 
-| 字段 | v6 | **v7（当前）** |
-|---|---|---|
-| `blend_w`（树 + 3×TCN 等分） | 0.54 / 0.96 / 0.80 | **0.50 / 0.50 / 0.75** |
-| `thresholds` | 0.115 / 0.065 / 0.040 | **0.130 / 0.270 / 0.050** |
-| `clf_tcn_w` | 逐目标 {0.60, 0.75, 0.30} | **{0.60, 0.70, 0.30}** |
+v7（已提交、官方 **75.73 分，提升 6.2542%，已晋级**，`5ef3a76`）：成员与 v5/v6 完全相同
+（`weight_tol` 树 + 3 seed TCN 42/43/44 × 150 epoch），唯一改动是官方口径下重调 PERM 阈值
+0.065 → 0.27（零 GPU）：
 
-备份：`models/model.pkl.v6bak`（v6 配置）、`model.pkl.v5bak`（v5 配置），两级可回滚。
+| 字段 | v6 | v7 | **v8（当前）** |
+|---|---|---|---|
+| 上下文特征 | ±10 / w21（225） | ±10 / w21（225） | **±60 / w41（321）** |
+| `blend_w`（树 + 3×TCN 等分） | 0.54 / 0.96 / 0.80 | 0.50 / 0.50 / 0.75 | **0.50 / 0.50 / 0.75** |
+| `thresholds` | 0.115 / 0.065 / 0.040 | 0.130 / 0.270 / 0.050 | **0.080 / 0.280 / 0.050** |
+| `clf_tcn_w` | 逐目标 {0.60, 0.75, 0.30} | {0.60, 0.70, 0.30} | **{0.60, 0.70, 0.30}** |
+| TCN 成员 | weight_tol 树 + 3 seed TCN 150ep | 同左 | **同左（复用 `.staging/tcn1.joblib`）** |
+
+备份：`model.pkl.v7bak` → `.v6bak` → `.v5bak`，三级可回滚；另有
+`result.json.v7bak` / `result.zip.v7bak` / `submission_code.zip.v7bak`。
 `src/model.py:151` 早已支持 dict 或标量。
 
-**v7 = 73.749，距 75 分线 +1.251。** 见 §4.4 与 §4.10。
+**v7 screen = 73.749（官方 75.73，已晋级）；v8 harness screen = 73.832（官方待公布）。**
+见 §4.4、§4.10、§4.13。v7 工件未重测，勿把 73.832 当成部署工件的实测分数。
 
 ### 4.1 v6 分数与分解（screen 8 井，逐点等权）
 
@@ -221,7 +232,7 @@ POR/SW 的 loss（`LN10·d/TOL` = `|ln(ŷ/y)|/TOL`）与官方 `|ŷ−y|/(TOL·|
    去掉 `class_weight`、官方判错代价加权（两种指数）、跨目标 `p_def` 特征、本目标 TCN 回归+概率
    特征，AUC 移动 0.000～0.006；表面增益 +0.099 落在 ±0.3 噪声带内，且分解后 POR / PERM
    的**独立分量全为负**（收益只在「更差分类器 × 更大阈值」的联合配置里存在，是联合过拟合）。
-   **未落地，维持 v7。别再重训分类器。**
+   **未落地（v7、v8 都维持原分类器）。别再重训分类器。**
 3. **（约 100 min，3 seed，需先确认）** 按修正后的 `metric_loss` 重训 TCN。
    **不建议**：§4.11 已证明分类器 AUC 天花板 ~0.897 是**特征的信息上限**，不是训练方式问题；
    TCN 的 AUC（0.8909）与树（0.8966）几乎相同，重训 TCN 不会突破这个上限。
@@ -237,9 +248,13 @@ POR/SW 的 loss（`LN10·d/TOL` = `|ln(ŷ/y)|/TOL`）与官方 `|ŷ−y|/(TOL·|
 - **screen 8 井含病态井** `c7611b0148bb4b`：POR 默认占比 0.001、**SW 全 NaN**，与其他 79 井不同源。
 - **旧 LOO 75.157 / 75.209 已作废**：独立复算只有逐井等权 70.3 / 逐点等权 68.0 量级，出处不明。
   逐井等权比官方逐点等权系统性虚高 **+2.31 分**。
-- **本项目从未产生过一个可辩护的 > 75 分数**（旧口径下从未 > 68.8）。
+- **本项目从未产生过一个可辩护的 > 75 *自测*分数**（旧口径下从未 > 68.8，官方口径 screen 最好 73.832）。
+  v7 的官方 75.73 与我们的 screen 之间是**测试集分布差异**，不是模型变强了 —— §4.12 的
+  n=1 校准（73.749 screen → 75.73 official）只说明这**一次**迁移偏正，不能反推"再加 0.1 screen
+  就能再涨 0.2 官方分"。v8 的官方分公布后，这个校准才有第二个点。
 - **不要误读**：`eval_deployed.py` 报的 70.940 用含验证井的全量模型自评，属**泄漏**。
-  `models/` 当前工件是全量 80 井训练的 v7，不要用它自评 screen 井。
+  `models/` 当前工件是全量 80 井训练的 **v8**（树 321 特征 + 复用 TCN），同样不要用它自评 screen 井。
+  v8 的诚实 screen 证据是 72 井 harness 的 73.832，不是任何部署工件自评分。
 
 ### 4.9 原阻塞项已解除
 
@@ -302,7 +317,7 @@ POR / PERM 的**两个独立分量都为负**：新分类器在 v7 自己的阈�
 指纹。只有 SW `cross+reg` 有正的独立分类器效应（+0.0003 acc = +0.011 分，AUC 同向 +0.0035），
 是唯一非过拟合的部分，但太小，不值得为它改 `src/model.py::predict`。
 
-**未落地，维持 v7。** 理由：
+**未落地（v7、v8 都维持原分类器）。** 理由：
 (a) |Δ| = 0.099 在 ±0.3 噪声带内，只占 75 分缺口 (+1.138) 的 8.6%；
 (b) 三分之二的增益来自交互项，换到官方测试集不一定会复现；
 (c) 落地要改 `train.py`（regret 权重需两遍拟合：先拟合回归器、算逐点判错代价、再重拟合分类器）
@@ -375,17 +390,58 @@ k≥25 时正号井 0/8。共识全崩的机制是三路 `p_def` 尺度差一个
 | **合计** | **73.749** | **73.832** | **+0.083** | |
 
 逐井 6/8 正、2/8 负（Δ ∈ [−0.029, +0.036]），留一井 jackknife **[+0.047, +0.111] 不跨 0**。
-**字面上三项全中 §6 晋级规则**（+0.083 ≥ +0.05、三目标同向、jackknife 不跨 0）。**未落地**，四个理由：
-(a) |Δ| 只占 ±0.3 噪声带的 28%；(b) 去污染后只有 **+0.058**（harness 比部署偏高 +0.025，
-别搞反方向）；(c) **AUC 在 POR/PERM 下降**，而 +0.083 里 **62% 来自已近饱和的 SW**（acc 0.7685、
-AUC 0.9730）；(d) v7 已晋级，若赛事按"最后一次提交"计分，一次更差的提交会覆盖 75.73。
+**字面上三项全中 §6 晋级规则**（+0.083 ≥ +0.05、三目标同向、jackknife 不跨 0）。
 
-落地路径成本低（`.staging/tcn1.joblib` 可复用，`train.py --stage tree` 约 5 min 零 GPU +
-`assemble` + 逐目标 `clf_tcn_w` 事后写回 + `predict.py` + `tools/package_submission.py`），
-但若赛事按"最佳成绩"计分且愿意承担风险，可以再谈 —— 见 `EXPERIMENTS.md` §8.16.2 / §8.20。
+落地前我给了四条反对理由（|Δ| 只占 ±0.3 噪声带的 28%；去污染后只有 +0.058，harness 比部署偏高
++0.025 别搞反方向；AUC 在 POR/PERM 下降而 62% 的增益来自已近饱和的 SW；v7 已晋级 75.73，
+若按"最后一次提交"计分会被覆盖）。**用户看过这些理由后仍然决定落地并重新提交**，因此已落地为 v8。
 
-**最终状态：v7 是唯一交付，不要再改。** 可追预算账面 +2.587（`diag_loss_budget.py`，73.749 → 76.336 screen）
-全部在分段器这一步，但 §4.11 + 本节已证明该步 AUC 上限就在 0.897，用现有 13 条曲线取不到。
+### 4.13 v8 落地（2026-09-26，当前交付）
+
+v8 = **±60/w41 上下文窗口（321 特征）+ 阈值 {0.080, 0.280, 0.050}**，融合权重沿用 v7。
+改动只落在三处可核验的文件：`src/feature.py`（`LAG_OFFSETS`/`WIN_SIZES`）、`config.yaml`
+（version 8.0）、`models/model.pkl`（321 特征重训的树 + 事后写回的逐目标 `clf_tcn_w`）。
+**TCN 成员未重训**：`.staging/tcn1.joblib` 直接复用（树与 TCN 特征通路独立，`predict.py` 里
+TCN 走 `context=False`），零 GPU。
+
+落地管线（全部零 GPU，约 12 min）：`train.py --stage tree --weight_tol 1`（约 4.5 min）→
+`--stage assemble --per_target_w 0.50,0.50,0.75 --thresholds 0.08,0.28,0.05 --with_pass2 0`
+→ `experiments/apply_v8_config.py`（写回逐目标 `clf_tcn_w` 并做 12 项部署前核验）→
+`parity_test.py`（5.3e-7 / 7.7e-7 / 6.2e-7，PASS）→ `predict.py` → `tools/package_submission.py`。
+
+**部署前核验全部通过（12 项）**：`clf_tcn_w` 写回 {0.60, 0.70, 0.30}、thresholds、blend_w
+每目标 4 路、`len(tcn_sds)==3`、无 `tcn2_sd`、scaler 321 列、三个目标的分类器与回归器
+`n_features_in_` 均为 321、`target_transform=='perm_log'`、POR 回归器 `monotonic_cst` 长度 321。
+
+**⚠️ 已交付工件的 screen 分数未被重测，`+0.083` 是 72 井 harness 的估计值。** 部署的 `model.pkl`
+是全 80 井重训的，在同一 72/8 切分上自评属**泄漏**（§4.8 已把 `eval_deployed.py` 自评标为泄漏）。
+诚实的 v8 screen 证据仍是 72 井 harness 的 **73.832**（留一井 jackknife [+0.047, +0.111]），
+不是部署工件的任何自评分数。**不要把 73.832 当成 v8 工件的实测分数引用。**
+
+**v8 官方分数待公布。** `result.zip` / `submission_code.zip`（version 8.0）已生成并验证：
+解包 `submission_code.zip` 到空目录、跑 `predict.py --data_dir ./data --output ./result.json`
+可**逐点零差异**复现 `result.json`（最大差异 0.000e+00），11 个规范文件齐备、顶层无多余项、
+烟雾预测 10 井 95,948 点、depth 升序、0 个非有限值。
+v7 工件完整备份（`*.v7bak` 三级可回滚），回滚路径：`apply_v7` = 还原 `.v7bak` 三个文件。
+
+**v7 回滚命令**（若 v8 官方分低于 75.73）：
+
+```bash
+cp models/model.pkl.v7bak models/model.pkl
+cp models/scaler.pkl.v7bak models/scaler.pkl
+cp result.json.v7bak result.json
+cp result.zip.v7bak result.zip
+cp submission_code.zip.v7bak submission_code.zip
+git checkout HEAD -- src/feature.py config.yaml README.md   # 回到 ±10/w21 + version 7.0
+python predict.py --data_dir ./test --output ./result.json  # 或直接复用 result.json.v7bak
+python tools/package_submission.py --workdir .
+```
+
+`*.v7bak` 是**本地-only**（在 `.gitignore`，不入 git；本仓库无 remote，所以本地备份就是唯一备份，
+别删）。v5/v6 的 `.v5bak`/`.v6bak` 是历史遗留的已跟踪文件。
+
+**未改动的既有结论仍然有效**：可追预算账面 +2.587（`diag_loss_budget.py`，73.749 → 76.336 screen）
+全部在分段器这一步，但 §4.11 + §4.12 已证明该步 AUC 上限就在 0.897，用现有 13 条曲线取不到。
 要再往上只能引入题目允许的新数据来源。
 
 ## 5. 硬约束（违反会段错误 / 挂起 / 打包不合格）
@@ -459,13 +515,15 @@ v9 阶段追加（2026-09-26，官方口径下对旧口径否决项的**复验**
 - **上下文窗口宽度**（`tune_ctx_width.py`，约 14 min 纯 CPU）：±10/±30/±60 × w21/w41，
   最好 ±60/w41 只值 +0.058（在 ±0.3 噪声带内），且 POR/PERM 的 **AUC 下降**
   （0.8966→0.8927、0.8906→0.8867），只有已近上限的 SW 升。**加 96 个特征没换来排序信息。**
-  落地成本很低（`.staging/tcn1.joblib` 可复用，只需重训树约 5 min，零 GPU），但收益不构成证据，
-  **不落地**。这是"新信息源"这条唯一未试杠杆的正式关闭。
+  落地成本很低（`.staging/tcn1.joblib` 可复用，只需重训树约 5 min，零 GPU），收益字面过晋级线
+  但落在噪声带内（去污染 +0.058）。**用户看过反对理由后仍决定落地 → 已落地为 v8（§4.13）。**
+  这是"新信息源"这条唯一未试杠杆的正式关闭：试过之后 AUC 反而降，确认拿不到信息。
 - **AUC ~0.897 至此被三次独立确认**：(1) 六种分类器训练方式只动 0.000–0.006；
   (2) 树 AUC ≈ TCN AUC，两路融合提不了 AUC；(3) 更宽窗口让 AUC 下降。
   **13 条曲线就是信息上限，不是训练方式的问题。**
 
-**v7 已晋级（官方 B 榜 75.73，见 §4.12）。当前交付是最终版，不要再改。**
+**v7 官方 75.73 已晋级（见 §4.12）。当前交付 v8（官方分待公布），三级备份可回滚到 v7。**
+以上所有否决结论仍然有效 —— 它们排除的是"训练得更好"这条路，不是"新特征"。
 
 
 ## 8. 常用命令
@@ -501,6 +559,17 @@ $P experiments/apply_v6_config.py            # 写回 model.pkl（备份 .v5bak�
 $P predict.py --data_dir ./test --output ./result.json
 $P experiments/parity_test.py                 # numpy/torch parity（要求 < 1e-4）
 $P tools/package_submission.py --workdir .    # 生成两个 zip + 跑合规 checklist + 解包烟雾预测
+
+# v8 实际落地管线（约 12 min，**零 GPU**）：TCN 走 context=False，改 src/feature.py 不影响
+# .staging/tcn1.joblib，所以只重训树。§5.1 约束下 tree 阶段不 import torch，可单独跑。
+$P train.py --data_dir ./train --out_dir ./models --stage tree --weight_tol 1     # 约 4.5 min
+$P train.py --stage assemble --per_target_w 0.50,0.50,0.75 \
+    --thresholds 0.08,0.28,0.05 --with_pass2 0     # 不设 --clf_tcn_w（默认 0 即不写标量）
+$P experiments/apply_v8_config.py --dry-run         # 12 项部署前核验（含 clf_tcn_w 静默跳过风险）
+$P experiments/apply_v8_config.py                   # 写回逐目标 clf_tcn_w {0.60, 0.70, 0.30}
+$P experiments/parity_test.py
+$P predict.py --data_dir ./test --output ./result.json
+$P tools/package_submission.py --workdir .          # ⚠️ 改完 README 后要重跑，zip 不会自动更新
 ```
 
 无正式测试框架；校验手段是 `tools/package_submission.py` 的 schema checklist、`parity_test.py`、以及 `experiments/` 下的评估脚本。

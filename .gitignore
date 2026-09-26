@@ -12,3 +12,6 @@ __pycache__/
 *.pyc
 .DS_Store
 experiments/runs/
+
+# 本地回滚安全网（不入 git；本仓库无 remote，本地备份即唯一备份，勿删）
+*.v7bak
