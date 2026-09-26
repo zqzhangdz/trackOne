@@ -45,14 +45,23 @@ def causal_smooth(arr: np.ndarray, win: int = SMOOTH_WIN) -> np.ndarray:
 
 
 def metric_loss(torch_F, pred_t, t, real, c):
+    """TCN 回归损失：按官方指标逐目标归一化误差。
+
+    2026-09-26 修正 PERM 分支。官方 PERM = max(0, 1 - |log10(ŷ/y)|)，
+    等效容差**恒为 1.0 decade、与真值大小无关**。pred_t 与 t 都已取 log10，
+    故 d 即官方误差，阈值取 1.0 即可对齐指标。
+    旧实现是 d / (0.08 * |log10 y|) 再 clamp(max=2.0)，等效阈值只有
+    0.02–0.16 decade —— 比官方严 6～50 倍，让 TCN 去追求官方根本不要求的精度。
+    注意：改动后重新训练的 TCN 与 v6 工件**不可比**（v6 是按旧目标训的）。
+    """
     d = (pred_t - t).abs()
     if c == "PERM":
-        e = d / (TOLERANCE[c] * (t.abs() + EPS))
+        e, cap = d, 1.0
     else:
-        e = LN10 * d / TOLERANCE[c]
+        e, cap = LN10 * d / TOLERANCE[c], 2.0
     if real.sum() == 0:
         return pred_t.sum() * 0.0
-    return e.clamp(max=2.0)[real].mean() + 0.05 * ((pred_t - t) ** 2)[real].mean()
+    return e.clamp(max=cap)[real].mean() + 0.05 * ((pred_t - t) ** 2)[real].mean()
 
 
 class EMA:

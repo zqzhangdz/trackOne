@@ -58,3 +58,14 @@ RECOMPUTE_LOO_A_120x2_wellequal,cv,8,1,1,perm_log,1,1,70.332,0.0,0,0,0,0,0,0,0,0
 RECOMPUTE_LOO_V5_150x3_wellequal,cv,8,1,1,perm_log,1,1,70.405,0.0,0,0,0,0,0,0,0,0,0
 RECOMPUTE_LOO_A_120x2_pointweighted,cv,8,1,1,perm_log,1,1,68.025,0.0,0,0,0,0,0,0,0,0,0
 RECOMPUTE_LOO_V5_150x3_pointweighted,cv,8,1,1,perm_log,1,1,68.097,0.0,0,0,0,0,0,0,0,0,0
+V6_official_metric_screen,official_screen,1,1,1,perm_log,0.54/0.96/0.80,1,73.31,0.0,0.6609,0.7608,0.7673,0.1694,0.4015,0.145,0.9881,0.9941,0.9929
+V6_legacy_metric_screen,legacy_repo,1,1,1,perm_log,0.54/0.96/0.80,1,68.778,0.0,0.6609,0.6313,0.7673,0.1694,0.0727,0.145,0.9881,0.9941,0.9929
+V6_official_tuneparm_best,official_screen,1,1,1,perm_log,0.56/PERM重调/0.80,1,73.772,0.0,0.6609,0.774,0.7673,0.1694,0.4015,0.145,0.9881,0.9941,0.9929
+V6_official_tuneparm_best,official_screen,1,1,1,perm_log,PERM 0.58,1,73.772,0.0,0.6609,0.774,0.7673,0.1694,0.4015,0.145,0.9881,0.9941,0.9929
+perm_level_purelog,perm_level_screen,1,1,1,perm_log,HistGB seg 48d abs_err,1,0.0,0.0,0.0,0.0,0.0,0.0,0.4469,0.0,0.0,0.0,0.0
+perm_level_por_pred,perm_level_screen,1,1,1,perm_log,HistGB seg +por_pred,1,0.0,0.0,0.0,0.0,0.0,0.0,0.4492,0.0,0.0,0.0,0.0
+perm_level_por_true,perm_level_screen,1,1,1,perm_log,HistGB seg +por_true(UB),1,0.0,0.0,0.0,0.0,0.0,0.0,0.4963,0.0,0.0,0.0,0.0
+perm_oracle_segmean,perm_oracle,1,1,1,perm_log,真值段均值,1,0.0,0.0,0.0,0.0,0.0,0.0,0.8429,0.0,0.0,0.0,0.0
+selector_72w,selector_screen,1,1,1,perm_log,HistGB 8候选 72井拟合,1,56.27,0.0,0.5933,0.3733,0.6811,0.0,0.0,0.0,0.0,0.0,0.0
+V6_official_best_wth,official_screen,1,1,1,perm_log,w .5/.5/.75 th .13/.27/.05 cw .6/.7/.3,1,73.749,0.0,0.6607,0.7738,0.767,0.0,0.0,0.0,0.0,0.0,0.0
+V6_oracle_seg_same_model,official_screen_oracleSeg,1,1,1,perm_log,真值分段+同回归器,1,76.308,0.0,0.6882,0.8072,0.7831,0.0,0.0,0.0,0.0,0.0,0.0
