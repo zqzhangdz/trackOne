@@ -17,9 +17,10 @@
 2. **双向 TCN pass1**：非因果时序卷积（感受野 ≈25 m）在 log10 空间回归三目标，
    损失为指标对齐的截断相对误差（带内线性、带外截断）+ 默认段 BCE。
 3. **融合与决策**：树回归与 TCN 回归在 log10 空间按逐目标权重融合
-   （POR 树0.40/TCN0.60、PERM 树0.05/TCN0.95、SW 树0.25/TCN0.75，TCN 为 2 seed 状态字典平均）；
-   默认段分类概率取"树 0.5 + TCN 0.5"平均；概率 ≥ 阈值
-   （POR 0.10、PERM 0.05、SW 0.05）输出默认常数，否则输出融合值。
+   （TCN 总权重 POR 0.54、PERM 0.96、SW 0.80，各目标内 3 个 seed 等分），
+   TCN 为 3 seed（42/43/44，各 150 epoch）双向 TCN 状态字典平均；
+   默认段分类概率取 `(1−cw)·树 + cw·TCN`，`cw` 亦逐目标（POR 0.60、PERM 0.75、SW 0.30）；
+   概率 ≥ 阈值（POR 0.115、PERM 0.065、SW 0.040）输出默认常数，否则输出融合值。
    真实段回归采用 metric-aware 训练：样本权重 ∝ 指标容差宽度（POR/SW 为 |y|、
    PERM 为 |log10 y|），把模型容量集中在"能得分"的深度点。
    （可选 pass2：以 pass1 因果平滑预测为通道的级联自回归 TCN，`train.py --with_pass2 1`；
@@ -29,7 +30,13 @@
 
 ## 三、运行环境
 
-- Python 3.10+；依赖见 `requirements.txt`（训练 TCN 阶段另需 torch，缺失时自动退化为树模型）
+- Python 3.10+（实测 3.13.9 / macOS）
+- 推理依赖（见 `requirements.txt`）：`numpy>=1.24`（实测 2.3.5）、`pandas>=2.0`（2.3.3）、
+  `scikit-learn>=1.4`（1.7.2）、`joblib>=1.3`、`PyYAML>=6.0`
+- 训练 TCN 阶段另需 `torch`（实测 2.14.0，MPS 可用）；推理阶段**不需要 torch**，
+  TCN 前向已手写导出为纯 numpy，`model.pkl` 内 3 个状态字典自包含
+- 模型名称 `TwoStageHistGB_BiTCN_Ens_PerTargetBlend`，版本 `6.0`
+
 
 ## 四、运行命令
 
