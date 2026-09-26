@@ -70,3 +70,5 @@ selector_72w,selector_screen,1,1,1,perm_log,HistGB 8候选 72井拟合,1,56.27,0
 V6_official_best_wth,official_screen,1,1,1,perm_log,w .5/.5/.75 th .13/.27/.05 cw .6/.7/.3,1,73.749,0.0,0.6607,0.7738,0.767,0.0,0.0,0.0,0.0,0.0,0.0
 V6_oracle_seg_same_model,official_screen_oracleSeg,1,1,1,perm_log,真值分段+同回归器,1,76.308,0.0,0.6882,0.8072,0.7831,0.0,0.0,0.0,0.0,0.0,0.0
 V7_official_best_wth,official_screen,1,1,1,perm_log,w .50/.50/.75 th .13/.27/.05 cw .60/.70/.30,1,73.749,0.0,0.6607,0.7738,0.767,0.0,0.0,0.0,0.0,0.0,0.0
+V8_clf_bal_v7th,official_screen,1,1,1,perm_log,clf bal(balanced) + weight_tol回归器 + v7阈值,1,73.762,0.0,0.6611,0.7739,0.7670,0.0,0.0,0.0,0.0,0.0,0.0
+V8_clf_best_cands,official_screen,1,1,1,perm_log,clf mw05/mw/cross+reg @各自最优th (联合过拟合 未落地),1,73.862,0.0,0.6628,0.7743,0.7679,0.0,0.0,0.0,0.0,0.0,0.0
