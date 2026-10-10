@@ -13,7 +13,17 @@ __pycache__/
 .DS_Store
 experiments/runs/
 
-# 本地回滚安全网（不入 git；本仓库无 remote，本地备份即唯一备份，勿删）
+# Claude Code 本地状态（workflow 脚本等，不入仓库）
+.claude/
+
+# 实验运行日志（可再生，`experiments/runs/` 已忽略，散落的顶层日志也忽略）
+experiments/*.log
+
+# 已被取代的 TCN 成员（`tcn1.joblib` 是当前成员，必须留在 git；这个 old_noobs 不需要）
+models/.staging/tcn1_old*.joblib
+
+# 本地回滚安全网（不入 git）。⚠️ 即使已 push 到 GitHub 远端，这四项仍被 .gitignore 排除，
+# 远端**不会**保存它们 —— 本地备份仍是唯一副本，勿删。
 *.v7bak
 # v9 落地前备份 v8（±60/w41 321 特征，官方分待公布）
 *.v8bak
