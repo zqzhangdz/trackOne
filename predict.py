@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from src.feature import load_wells, make_features
+from src.feature import load_wells, make_features, make_tcn_features
 from src.model import load_model, predict
 from src.utils import load_yaml_config, write_result_json
 
@@ -57,7 +57,7 @@ def main() -> None:
         X_tcn = None
         if has_tcn:
             medians, stds = scaler["tcn_medians"], scaler["tcn_stds"]
-            X_tcn = make_features(df, context=False, priors=True).fillna(medians)
+            X_tcn = make_tcn_features(df, with_wellz=bool(scaler.get("tcn_wellz", False))).fillna(medians)
             X_tcn = (X_tcn - stds.replace(0, 1.0)) / stds.replace(0, 1.0)
             X_tcn = X_tcn[scaler.get("tcn_feature_columns", list(X_tcn.columns))]
         pred = predict(model, X, X_tcn)

@@ -18,7 +18,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src.feature import default_mask, inverse_transform_target, load_wells, make_features, make_targets, transform_target
+from src.feature import default_mask, inverse_transform_target, load_wells, make_features, make_tcn_features, make_targets, transform_target
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 from src.model import (
@@ -85,10 +85,10 @@ class EMA:
         return {k: v.numpy() for k, v in self.shadow.items()}
 
 
-def build_wells(wells, medians, stds, channels=None):
+def build_wells(wells, medians, stds, channels=None, with_wellz=False):
     out = []
     for w in wells:
-        X = make_features(w, context=False, priors=True).fillna(medians)
+        X = make_tcn_features(w, with_wellz=with_wellz).fillna(medians)
         X = ((X - stds.replace(0, 1.0)) / stds.replace(0, 1.0)).to_numpy(dtype=np.float32)
         Y = make_targets(w)
         isd = default_mask(Y)
@@ -244,8 +244,10 @@ def main() -> None:
     ap.add_argument("--thresholds", default="", help="决策阈值覆盖 POR:PERM:SW，如 0.10,0.05,0.05（空=用默认）")
     ap.add_argument("--weight_tol", type=int, default=1,
                     help="真实段回归样本权重 ∝ 指标容差宽度（metric-aware 重要性加权）")
-    ap.add_argument("--device", choices=["cpu", "mps"], default="cpu",
-                    help="TCN 训练设备；默认 cpu 以规避 macOS MPS 驱动与 OpenMP 的交互问题")
+    ap.add_argument("--device", choices=["cpu", "mps", "cuda"], default="cpu",
+                    help="TCN 训练设备；默认 cpu 以规避 macOS MPS 驱动与 OpenMP 的交互问题（远端 A100 用 cuda）")
+    ap.add_argument("--tcn_wellz", type=int, default=0,
+                    help="TCN 通路是否追加 12 列 wellz_*（迭代 2 实验变量：0=老成员同构 20 列，1=32 列）")
     args = ap.parse_args()
 
     if args.stage == "all":
@@ -340,28 +342,31 @@ def main() -> None:
 
         device = torch.device(args.device)
         print("device:", device, flush=True)
-        base = make_features(df, context=False, priors=True)
+        base = make_tcn_features(df, with_wellz=args.tcn_wellz)
         medians, stds = base.median(), base.std()
+        print(f"TCN 特征 {base.shape[1]} 列 (tcn_wellz={args.tcn_wellz}): {list(base.columns)}", flush=True)
         if args.stage == "tcn1":
-            data = build_wells(wells, medians, stds)
+            data = build_wells(wells, medians, stds, with_wellz=args.tcn_wellz)
             n_feat = data[0]["X"].shape[1]
             seeds = [int(x) for x in args.seed_list.split(",") if x.strip()] or [args.seed]
             sds = []
             for sd_i in seeds:
                 print(f"TCN pass1 seed={sd_i}: {args.epochs1} epochs ...", flush=True)
                 sds.append(train_tcn(data, None, None, n_feat, args, device, args.epochs1, channels=False, seed=sd_i))
-            joblib.dump({"sd": sds[0], "sds": sds, "seeds": seeds, "medians": medians, "stds": stds},
+            joblib.dump({"sd": sds[0], "sds": sds, "seeds": seeds, "medians": medians, "stds": stds,
+                         "tcn_wellz": bool(args.tcn_wellz)},
                         os.path.join(stage_dir, "tcn1.joblib"))
         else:
             art1 = joblib.load(os.path.join(stage_dir, "tcn1.joblib"))
             medians, stds = art1["medians"], art1["stds"]
+            wellz = bool(art1.get("tcn_wellz", False))
             channels = {}
             for w in wells:
-                Xw = make_features(w, context=False, priors=True).fillna(medians)
+                Xw = make_tcn_features(w, with_wellz=wellz).fillna(medians)
                 Xw = ((Xw - stds.replace(0, 1.0)) / stds.replace(0, 1.0)).to_numpy(dtype=np.float32)
                 o = numpy_forward_tcn(Xw, art1["sd"], list(DILATIONS) * 2)
                 channels[w["logId"].iloc[0]] = {c: causal_smooth(o[c][:, 1]) for c in TARGETS}
-            data = build_wells(wells, medians, stds, channels=channels)
+            data = build_wells(wells, medians, stds, channels=channels, with_wellz=wellz)
             n_feat = data[0]["X"].shape[1] + len(TARGETS)
             print(f"TCN pass2: {args.epochs2} epochs (自回归通道) ...", flush=True)
             sd2 = train_tcn(data, None, None, n_feat, args, device, args.epochs2, channels=True, seed=args.seed + 1)
@@ -418,7 +423,8 @@ def main() -> None:
         scaler_dict.update(
             tcn_medians=art1["medians"],
             tcn_stds=art1["stds"],
-            tcn_feature_columns=list(make_features(df, context=False, priors=True).columns),
+            tcn_feature_columns=list(make_tcn_features(df, with_wellz=bool(art1.get("tcn_wellz", False))).columns),
+            tcn_wellz=bool(art1.get("tcn_wellz", False)),
         )
     os.makedirs(args.out_dir, exist_ok=True)
     joblib.dump(model_dict, os.path.join(args.out_dir, "model.pkl"))

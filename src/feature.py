@@ -65,7 +65,19 @@ def add_physics_priors(X: pd.DataFrame) -> pd.DataFrame:
     return X
 
 
-def _context_for_well(g: pd.DataFrame) -> pd.DataFrame:
+def _wellz_dict(g: pd.DataFrame) -> dict[str, np.ndarray]:
+    """12 列逐井 z 分数（wellz_*）。统计量只用本井数据，推理可用，无标签泄漏。"""
+    out = {}
+    for c in CURVE_COLS:
+        s = g[c]
+        mu = s.mean()
+        sd = s.std(ddof=0)                      # ddof=0 对齐 np.nanstd
+        sd = float(sd) if (pd.notna(sd) and sd > 0) else 1.0
+        out[f"wellz_{c}"] = ((s - mu) / sd).to_numpy()
+    return out
+
+
+def _context_for_well(g: pd.DataFrame, wellz: bool = True) -> pd.DataFrame:
     """单井上下文特征：lag/lead、窗口均值/标准差、一阶差分（按深度排序计算）."""
     g = g.sort_values("DEPTH")
     cols: dict[str, np.ndarray] = {
@@ -80,20 +92,16 @@ def _context_for_well(g: pd.DataFrame) -> pd.DataFrame:
             cols[f"{c}_wmean{w}"] = r.mean().to_numpy()
             cols[f"{c}_wstd{w}"] = r.std().fillna(0.0).to_numpy()
         cols[f"{c}_diff1"] = s.diff(1).to_numpy()
-    # 逐井 z 分数（12 列，追加在末尾）：本井电平偏移。统计量只用本井数据，推理可用，
-    # 无标签泄漏。每口井的电平基线本身就是储层/井型信息 —— 所以这里是「追加」而
-    # 不是「替换」原始曲线：替换会把绝对刻度抹掉，实测 POR AUC 0.8966 → 0.8619。
-    # 见 experiments/tunex_wellnorm.py 与 CLAUDE.md §4.14。
-    for c in CURVE_COLS:
-        s = g[c]
-        mu = s.mean()
-        sd = s.std(ddof=0)                      # ddof=0 对齐 np.nanstd
-        sd = float(sd) if (pd.notna(sd) and sd > 0) else 1.0
-        cols[f"wellz_{c}"] = ((s - mu) / sd).to_numpy()
+    # 逐井 z 分数（12 列，追加在末尾）：本井电平偏移。每口井的电平基线本身就是
+    # 储层/井型信息 —— 所以这里是「追加」而不是「替换」原始曲线：替换会把绝对刻度
+    # 抹掉，实测 POR AUC 0.8966 → 0.8619。见 experiments/tunex_wellnorm.py 与 CLAUDE.md §4.14。
+    if wellz:
+        cols.update(_wellz_dict(g))
     return pd.DataFrame(cols, index=g.index)
 
 
-def make_features(df: pd.DataFrame, context: bool = False, priors: bool = False) -> pd.DataFrame:
+def make_features(df: pd.DataFrame, context: bool = False, priors: bool = False,
+                  wellz: bool = True) -> pd.DataFrame:
     X = df[FEATURES].copy()
     for c in FEATURES:
         X.loc[_is_sentinel(X[c]), c] = np.nan
@@ -106,10 +114,26 @@ def make_features(df: pd.DataFrame, context: bool = False, priors: bool = False)
     if context:
         parts = []
         for _, g in X.groupby(df["logId"].to_numpy(), sort=False):
-            parts.append(_context_for_well(g))
+            parts.append(_context_for_well(g, wellz=wellz))
         ctx = pd.concat(parts)
         X = X.join(ctx)
     return X.astype(np.float32)
+
+
+def make_tcn_features(df: pd.DataFrame, with_wellz: bool = False) -> pd.DataFrame:
+    """TCN 通路特征：点式曲线 + 派生电阻率 + 物理先验（20 列）[+ 12 列 wellz → 32 列]。
+
+    树通路走 context=True（225 上下文 + 12 wellz = 237），TCN 通路独立于此：
+    迭代 2 的实验变量 = TCN 从未见过 wellz（老成员 20 列）。with_wellz=False
+    时与旧版 `make_features(df, context=False, priors=True)` 逐点等价。
+    """
+    X = make_features(df, context=False, priors=True)
+    if with_wellz:
+        parts = []
+        for _, g in X.groupby(df["logId"].to_numpy(), sort=False):
+            parts.append(pd.DataFrame(_wellz_dict(g), index=g.index))
+        X = X.join(pd.concat(parts))
+    return X
 
 
 def make_targets(df: pd.DataFrame) -> pd.DataFrame:

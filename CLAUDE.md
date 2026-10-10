@@ -13,15 +13,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `result.zip` | 内含单个 `result.json`，10 口测试井逐深度点预测，schema 不得增删改任何字段 |
 | `submission_code.zip` | 严格按下方 §3.2 的 11 个文件树，可一键复现：`python predict.py --data_dir ./data --output ./result.json` |
 
-**官方成绩（2026-09-26，决赛口径，提交记录共 8 条、可见 5 条）**：
+**官方成绩（决赛口径，n=5 个版本，screen→官方偏移带 +7.75～+7.80）**：
 
 | 版本 | 提交时间 | 官方分 | screen | 偏移 |
 |---|---|---|---|---|
 | v6 族 | 09-18 11:30 | 80.3943 | 73.310 | +7.08 |
-| v7 | 09-26 12:53 | **81.5516** | 73.749 | **+7.80** |
+| v7 | 09-26 12:53 | 81.5516 | 73.749 | +7.80 |
 | v8 | 09-26 14:39 | 81.6281 | 73.825 | +7.80 |
-| **v9** | 09-26 19:19 | **81.6793** | **73.931** | +7.75 |
-| **v10（当前交付，官方分待公布）** | 10-10 | **?** | **74.009** | ? |
+| v9 | 09-26 19:19 | 81.6793 | 73.931 | +7.75 |
+| **v10（当前参赛成绩）** | **10-10** | **81.8091** | **74.009** | **+7.80** |
 
 **⚠️ 75.73 不是 v7 的官方分。** 那是早一期（B 榜）的成绩；决赛换了测试集或口径，整体抬升约
 +5.9。"提升百分比 6.2542%"（75.73 / 71.27）因此**不是决赛口径的数字** —— 81.5516 / 71.27 = +14.57%。
@@ -30,7 +30,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **v9 = 81.6793 是上一参赛成绩**（`*.v8bak` → `.v7bak` → `.v6bak` → `.v5bak` 四级备份可回滚）。
 **v10（2026-10-10）= POR 回归器 absolute_error + bump 残差加权**，harness screen 74.009
-（+0.078 vs v9 73.931，LOO 均值 CI [+0.044,+0.184] 不跨 0），官方分待用户提交后反馈。
+（+0.078 vs v9 73.931，LOO 均值 CI [+0.044,+0.184] 不跨 0），
+**官方分 81.8091（+0.1298 vs v9，2026-10-10 用户回报）** —— screen Δ→官方 Δ 传递比 1.66×，
+第 5 个独立版本再次确认偏移带 +7.75～+7.80。
 **提交机会不再受限**（用户已明确放弃"剩余次数"的考虑）：每一轮迭代产出可提交工件，用户提交
 并回报官方分数，回归反馈循环见 §4.16 与 §12。
 v8 的 ±60/w41 宽上下文已被同一 harness 证明是负资产（73.825 vs 225+wellz 73.931），见 §4.14。
@@ -369,14 +371,15 @@ TCN（AUC 与树相同，重训无望突破）、融合与阈值（§4.4 网格�
 
 **⚠️ 本节的校准已被 2026-09-26 晚的三次决赛提交彻底改写，下面的 "−1.98 / n=1" 是错的。**
 
-**决赛口径的真实校准（三个独立版本，偏移带 +7.75～+7.80，极为稳定）**：
+**决赛口径的真实校准（五个独立版本，偏移带 +7.75～+7.80，极为稳定）**：
 
 | 版本 | screen | 官方 | 偏移 | 相邻 screen Δ → 官方 Δ |
 |---|---|---|---|---|
 | v6 族（09-18） | 73.310 | 80.3943 | +7.08 | — |
 | v7（09-26 12:53） | 73.749 | 81.5516 | **+7.80** | +0.439 → +0.595 |
 | v8（09-26 14:39） | 73.825 | 81.6281 | +7.80 | +0.076 → +0.077 |
-| v9（09-26 19:19） | 73.931 | 81.6793 | **+7.75** | +0.106 → +0.051 |
+| v9（09-26 19:19） | 73.931 | 81.6793 | +7.75 | +0.106 → +0.051 |
+| **v10（10-10）** | **74.009** | **81.8091** | **+7.80** | **+0.078 → +0.130（1.66×）** |
 
 - **screen 系统性偏低约 7.75 分**，不是此前估的 +1.98。§4.8 写的"screen 后 8 井默认段占比比
   训练集低 7–9 pp"方向对，但量级被严重低估 —— 默认段占 60–73%，每 1 pp 的默认段占比差异值
@@ -592,6 +595,11 @@ LOO 均值 CI **→ [+0.044,+0.184]**、不跨 0（p=0.352、正号 4/7，按 §
 **为什么值得提交**：这是本项目第一个在回归目标函数轴上通过 LOO 均值 CI 检验的正候选。收益
 +0.078 ≈ 官方 +0.08（+7.75 偏移带），虽小但方向唯一可证。
 **已交付**：`result.zip` / `submission_code.zip`（version 10.0）已生成并全部 checks PASS。
+**官方分（2026-10-10 用户回报）= 81.8091，相对 v9 81.6793 为 +0.1298。** screen Δ +0.078 →
+官方 Δ +0.130，传递比 1.66× —— harness 不但方向对，还低估了收益。偏移 +7.8001 精确落在
+§4.12 的 +7.75～+7.80 带内（n=5 版本中最稳定的一次）。**"回归目标函数轴"至此确认为第二根
+有效杠杆**（第一根是 §4.14 的 wellz），且 v10 官方分验证了 §4.15 上界分析的缺口：+2.4 的
+分段上界之外，回归器收敛速度仍有 +0.13 官方分的空间。
 
 **部署前核验通过（与 §4.14 相同的 15 项 + 2 项新增）**：apply_v9_config.py 15 项全 OK；
 新增核验 ① `load_model` 后 POR `regressors["POR"].loss == "absolute_error"`、
@@ -819,31 +827,44 @@ $P experiments/tunex_wellnorm.py --ctx v8 --only base,plus_wellz    # → runs/w
 **平台**：<https://discovery.intern-ai.org.cn/compute/training-task/create>（InternAI Discovery）。
 表单：任务描述（可选）、git 仓库 URL + 分支、启动命令（≤500 字符，含依赖安装）、
 当前工作目录 `/code/workspace`。资源配置可选 A100-1-80G（16G RAM / 80G VRAM）、
-Ascend910B-1-64G（16G RAM / 64G VRAM）、CPU-4C-16G。**数据不在 git 里**（.gitignore），
-平台有「我的云盘」，用 `tools/remote_bundle.sh` 打包 train/test 传上去（云盘挂载路径以平台
-[查看文档] 为准，本文件未确认）。
+Ascend910B-1-64G（16G RAM / 64G VRAM）、CPU-4C-16G。
+
+**代码走 GitHub（2026-10-10 起，用户无云盘、数据手动上传）**：
+- 代码与模型工件走 git：本地 commit → push 到用户自己的 GitHub 仓库（本仓库无 remote，
+  由用户建仓库并 `git remote add origin` + push）。平台表单只填仓库 URL + 分支（推送
+  `main` 即可）。
+- 数据（`train/` ~87M + `test/` ~8.7M）不 push、不进 GitHub（.gitignore）。训练前用
+  `bash tools/remote_bundle.sh <名字>.tar.xz` 本地打包，在平台侧**手动上传**该 tar.xz
+  （上传入口/落盘路径以平台 [查看文档] 为准，把实际路径填进启动命令的 `DATA_IN`）；
+  或手动上传后解压成 `train/ test/` 目录放在 `/code/workspace` 下，`remote_run.sh`
+  会自动兜底找到。
+- `remote_run.sh` 对 `DATA_IN` 的解析顺序：① tar.xz 文件 → 解压；② 含 `train/` 的目录 →
+  直接用；③ 都不给 → 用 `./train ./test`。
 
 **推荐选择 A100**：Ascend 910B 需要 torch_npu 与 CANN 工具链，启动命令会超 500 字符，不是首选。
 内存仍是 16G，和本地一样；训练时如果 OOM，先砍 batch（默认 16）再砍 window（默认 1024）。
+`remote_run.sh` 自动探测 CUDA，有则用 `cuda`，无则回退 `cpu`（train.py 已加 `cuda` 选项，
+本地默认仍是 `cpu`，不受影响）。
 
-**准备步骤**：
-1. `git remote add origin <你自己的 GitHub 仓库>` 并 push 代码（本仓库无 remote，需用户自建）；
-2. `bash tools/remote_bundle.sh remote_data.tar.xz` → 上传到平台「我的云盘」；
-3. 任务表单填仓库 URL + 分支，启动命令见下。
+**准备步骤**（每轮迭代）：
+1. 本地跑通并 commit → `git push origin main`（用户自己的 GitHub 仓库）；
+2. `bash tools/remote_bundle.sh remote_data_vX.tar.xz` → 在平台手动上传；
+3. 任务表单：仓库 URL + 分支 `main` + 启动命令（见下，`DATA_IN` 填手动上传后的实际路径）。
 
-**启动命令模板**（≤500 字符版本，直接粘贴；`<stage>` ∈ tree | tcn1 | all | eval）：
+**启动命令模板**（≤500 字符，直接粘贴；`<stage>` ∈ tree | tcn1 | all | eval | package）：
 
 ```bash
-cd /code/workspace && python -m pip install -q -r requirements.txt && python -c "import torch" 2>/dev/null || python -m pip install -q torch && DATA_IN=/code/workspace/data/remote_data.tar.xz bash tools/remote_run.sh <stage> && echo DONE
+cd /code/workspace && python -m pip install -q -r requirements.txt && python -c "import torch" 2>/dev/null || python -m pip install -q torch && DATA_IN=<手动上传的tar.xz路径> bash tools/remote_run.sh <stage> && echo DONE
 ```
 
-上面的 `DATA_IN` 里头 `/code/workspace/data/` 是「我的云盘」挂载位置的**占位符** —— 请在平台
-[查看文档] 确认云盘实际挂载路径后替换。若云盘不可用，可把 tar.xz 内容加入 git 大文件绕过
-（不推荐）。数据与模型产物（model.pkl / scaler.pkl / result.json / 两个 zip）都不在 git 里，
-远端跑完要用平台的下载通道或云盘带回本地，然后按 §0 的打包流程收尾。
+若手动上传后数据已解压到 `/code/workspace/train` 与 `/code/workspace/test`，可省略
+`DATA_IN=<...>` 段（`remote_run.sh` 自动兜底）。模型产物（model.pkl / scaler.pkl /
+result.json / 两个 zip）远端运行后经平台下载通道带回本地，按 §0 的打包流程收尾再 push 回
+git（`.staging/tcn1.joblib` 重训后也在 git 里，见 §12 准备步骤 —— 远端 tcn1 产物下载回
+本地后放入 `models/.staging/` 并 commit，与本地训练产物同待遇）。
 
 **不要做的事**：
 - 不要在远端改代码。远端产生的 bug 先在本地复现再改。
 - 不要用 torch_npu/Ascend（除非用户主动要求）。
-- 不要为了适配远端去改 requirements.txt / train.py / predict.py 的默认行为。
+- 不要为了适配远端去改 requirements.txt / predict.py 的默认行为（train.py 仅加 `cuda` 设备选项）。
 
