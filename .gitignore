@@ -3,6 +3,8 @@ train/
 test/
 result.json
 *.zip
+# 数据打包产物（tools/remote_bundle.sh 生成，供手动上传远端；可再生，体积大）
+*.tar.xz
 artifacts/
 artifacts_seq/
 artifacts_seq_smoke/
