@@ -835,11 +835,11 @@ Ascend910B-1-64G（16G RAM / 64G VRAM）、CPU-4C-16G。
   `git push origin main`。平台表单填 `https://github.com/zqzhangdz/trackOne` + 分支 `main`。
 - **⚠️ 本环境网络：SSH push 会间歇失败，HTTPS 不能用，重试即可。** 本机 DNS（阿里 223.5.5.5）
   把 `github.com` 解析到代理地址 **`198.18.0.12`**，不是 GitHub 真实 IP（`140.82.x.x`）。
-  表现为：SSH(22) 隧道时好时坏 —— `banner exchange` 随机超时（实测第 1 次 push 失败、第 2 次成功；
-  `ssh -T` 认证时也曾成功过），**失败直接重试**，不要改配置。HTTPS(443) 反而稳定（`curl -I
-  https://github.com` → HTTP 200），但 osxkeychain 里**没有** github.com 的 HTTPS 凭据
-  （`git credential-osxkeychain get` 返回空），所以**只能走 SSH**。若要切 HTTPS 需先建 PAT
-  并 `git config credential.helper osxkeychain` 后交互式登录一次。
+  表现为：SSH(22) 隧道时好时坏 —— `banner exchange` 随机超时。**首推失败率约 50%**（实测 4 次
+  push 里 2 次首次失败、重试立即成功；期间 `ssh -T` 认证也有一次成功），所以**失败直接重试，
+  不要改任何配置**。HTTPS(443) 反而稳定（`curl -I https://github.com` → HTTP 200），但
+  osxkeychain 里**没有** github.com 的 HTTPS 凭据（`git credential-osxkeychain get` 返回空），
+  所以**只能走 SSH**。若要切 HTTPS 需先建 PAT 再交互式登录一次。
 - 数据（`train/` ~87M + `test/` ~8.7M）不 push、不进 GitHub（.gitignore）。训练前用
   `bash tools/remote_bundle.sh <名字>.tar.xz` 本地打包，在平台侧**手动上传**该 tar.xz
   （上传入口/落盘路径以平台 [查看文档] 为准，把实际路径填进启动命令的 `DATA_IN`）；
