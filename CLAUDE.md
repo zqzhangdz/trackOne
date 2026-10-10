@@ -830,9 +830,16 @@ $P experiments/tunex_wellnorm.py --ctx v8 --only base,plus_wellz    # → runs/w
 Ascend910B-1-64G（16G RAM / 64G VRAM）、CPU-4C-16G。
 
 **代码走 GitHub（2026-10-10 起，用户无云盘、数据手动上传）**：
-- 代码与模型工件走 git：本地 commit → push 到用户自己的 GitHub 仓库（本仓库无 remote，
-  由用户建仓库并 `git remote add origin` + push）。平台表单只填仓库 URL + 分支（推送
-  `main` 即可）。
+- 代码与模型工件走 git。远端 `origin = git@github.com:zqzhangdz/trackOne.git`（**私有**仓库，
+  未认证访问仓库页/API 一律返回 404，属正常现象，不代表仓库不存在）。本地 commit →
+  `git push origin main`。平台表单填 `https://github.com/zqzhangdz/trackOne` + 分支 `main`。
+- **⚠️ 本环境网络：SSH push 会间歇失败，HTTPS 不能用，重试即可。** 本机 DNS（阿里 223.5.5.5）
+  把 `github.com` 解析到代理地址 **`198.18.0.12`**，不是 GitHub 真实 IP（`140.82.x.x`）。
+  表现为：SSH(22) 隧道时好时坏 —— `banner exchange` 随机超时（实测第 1 次 push 失败、第 2 次成功；
+  `ssh -T` 认证时也曾成功过），**失败直接重试**，不要改配置。HTTPS(443) 反而稳定（`curl -I
+  https://github.com` → HTTP 200），但 osxkeychain 里**没有** github.com 的 HTTPS 凭据
+  （`git credential-osxkeychain get` 返回空），所以**只能走 SSH**。若要切 HTTPS 需先建 PAT
+  并 `git config credential.helper osxkeychain` 后交互式登录一次。
 - 数据（`train/` ~87M + `test/` ~8.7M）不 push、不进 GitHub（.gitignore）。训练前用
   `bash tools/remote_bundle.sh <名字>.tar.xz` 本地打包，在平台侧**手动上传**该 tar.xz
   （上传入口/落盘路径以平台 [查看文档] 为准，把实际路径填进启动命令的 `DATA_IN`）；
