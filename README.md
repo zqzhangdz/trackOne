@@ -29,6 +29,10 @@
    概率 ≥ 阈值（POR 0.080、PERM 0.250、SW 0.050）输出默认常数，否则输出融合值。
    真实段回归采用 metric-aware 训练：样本权重 ∝ 指标容差宽度（POR/SW 为 |y|、
    PERM 为 |log10 y|），把模型容量集中在"能得分"的深度点。
+   **v10 新增：POR 回归器 absolute_error + bump 残差加权。** 先用 squared_error
+   拟合得到 pass-1 预测，在训练集真实段上算 z = |log10(ŷ/y)| / log10(1.08)，
+   以 bump 核（S=0.25，容差边界附近残差权重最高）对 POR 单独重训，
+   LOO CI [+0.044,+0.184] 不跨 0。PERM/SW 回归器与三目标分类器、TCN 融合权重沿用 v9。
    （可选 pass2：以 pass1 因果平滑预测为通道的级联自回归 TCN，`train.py --with_pass2 1`；
    验证集无增益，默认关闭。）
 
@@ -41,7 +45,7 @@
   `scikit-learn>=1.4`（1.7.2）、`joblib>=1.3`、`PyYAML>=6.0`
 - 训练 TCN 阶段另需 `torch`（实测 2.14.0，MPS 可用）；推理阶段**不需要 torch**，
   TCN 前向已手写导出为纯 numpy，`model.pkl` 内 3 个状态字典自包含
-- 模型名称 `TwoStageHistGB_BiTCN_Ens_PerTargetBlend`，版本 `9.0`（见 `config.yaml`）
+- 模型名称 `TwoStageHistGB_BiTCN_Ens_PerTargetBlend`，版本 `10.0`（见 `config.yaml`）
 
 
 ## 四、运行命令

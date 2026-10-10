@@ -19,8 +19,12 @@ import numpy as np
 import pandas as pd
 
 from src.feature import default_mask, inverse_transform_target, load_wells, make_features, make_targets, transform_target
+from sklearn.ensemble import HistGradientBoostingRegressor
+
 from src.model import (
+    DEFAULT_REG_PARAMS,
     EPS,
+    POR_MONOTONIC,
     TARGETS,
     TwoStageModel,
     get_tcn_classes,
@@ -283,11 +287,44 @@ def main() -> None:
                 def_ = isdef.loc[valid, c].astype(int).to_numpy()
                 real = def_ == 0
                 yv = y.to_numpy()[real]
+                yt = transform_target(c, y[real])
                 w = np.abs(np.log10(np.maximum(yv, EPS))) if c == "PERM" else np.abs(yv)
                 w = np.clip(w, np.percentile(w, 5), np.percentile(w, 95))
                 w = w / w.mean()
-                yt = transform_target(c, y[real])
                 tree.regressors[c].fit(X.loc[valid][real], yt, sample_weight=w)
+            # v10 (POR): 在 weight_tol 回归器上再换 absolute_error + bump 残差加权。
+            # 配方与 experiments/tune_reg_isolated.py 的 abs_bump 完全一致：
+            #   z = 训练集真实段上 |log10(ŷ_1/y)| / log10(1.08)，ŷ_1 = weight_tol 后的 POR 回归器预测
+            #   bump = sig((1-z)/S) * (1 - sig((1-z)/S))，S = 0.25，再 clip [p5,p95] / mean
+            valid = Y["POR"].notna().to_numpy()
+            y = Y.loc[valid, "POR"]
+            def_ = isdef.loc[valid, "POR"].astype(int).to_numpy()
+            real = def_ == 0
+            pred_lin = inverse_transform_target(
+                "POR",
+                pd.Series(tree.regressors["POR"].predict(X.loc[valid]),
+                          index=X.loc[valid].index),
+                "perm_log",
+            )
+            yt = transform_target("POR", y[real])
+            p10 = np.log10(np.maximum(pred_lin.to_numpy(), EPS))
+            y10 = np.log10(np.maximum(y.to_numpy(), EPS))
+            z = np.abs(p10 - y10)[real] / np.log10(1.08)
+            S = 0.25
+            with np.errstate(over="ignore"):
+                sig_a = 1.0 / (1.0 + np.exp(-(1.0 - z) / S))
+            w = sig_a * (1.0 - sig_a)  # bump
+            w = np.clip(w, np.percentile(w, 5), np.percentile(w, 95))
+            w = w / w.mean()
+            params = dict(DEFAULT_REG_PARAMS)
+            params["loss"] = "absolute_error"
+            params["monotonic_cst"] = [POR_MONOTONIC.get(col, 0) for col in list(X.columns)]
+            new_reg = HistGradientBoostingRegressor(random_state=42, **params)
+            new_reg.fit(X.loc[valid][real], yt, sample_weight=w)
+            tree.regressors["POR"] = new_reg
+            print(f"    POR v10: absolute_error + bump（z 来自 weight_tol 回归器）, "
+                  f"n={real.sum():,}  z 中位 {np.median(z):.3f}  "
+                  f"带内 {(z <= 1).mean() * 100:.1f}%", flush=True)
         joblib.dump(
             {
                 "model_dict": tree.to_dict(),

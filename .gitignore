@@ -17,3 +17,6 @@ experiments/runs/
 *.v7bak
 # v9 落地前备份 v8（±60/w41 321 特征，官方分待公布）
 *.v8bak
+# v10 迭代 1: POR 回归器 absolute_error + bump 权重
+*.v9bak
+*.v10bak
