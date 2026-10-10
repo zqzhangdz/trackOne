@@ -1365,3 +1365,17 @@ pass-2 用 `loss="absolute_error"` + `bump` 权重重拟合（`monotonic_cst` �
 因 `absolute_error` 要求新建 `HistGradientBoostingRegressor`，不能 `tree.regressors[c].fit()`
 就地重拟）；PERM/SW 的 pass-2 维持 `|log10 y|`/`|y|` 不变。TCN、分类器、scaler、
 `predict.py` 全部不动。备份链接到 `.v9bak`。约 4.5 min，零 GPU。
+
+### 8.26.8 §8.26 落地（2026-10-10，v10 交付）
+
+`abs_bump` 已按 §8.26.7 的落地配方落地为 **v10**：
+- `train.py` weight_tol 块：三目标先按 v9 惯例重训（PERM |log10 y|、POR/SW |y|），POR 再在
+  **weight_tol 后**的回归器上算 z 并换 absolute_error + bump 单独重训 —— 与原配方的唯一差异是
+  z 的 pass-1 基准从"部署回归器"变为"weight_tol 后回归器"，排除第一版 15.1096 vs 0.0105 的
+  过度激进差异，同时偏离≤1e-4 的点数与原配方一致（21,645）。重训后 z 中位 0.932、带内 52.2%。
+- v9 阈值 0.080 维持（abs_bump 重扫 +0.013 过小），req 规则 §6 未变。
+- 部署核验：POR reg loss=absolute_error / PERM、SW 仍 squared_error；parity PASS；位处
+  [225..236] 的 12 列 wellz、237 特征数、`n_features_in_` 全部复核一致。
+- 回滚 v9：`git checkout 63726b5 -- train.py`，`cp models/model.pkl.v9bak models/model.pkl`。
+
+提交 98a249b。官方分待用户提交后反馈。
